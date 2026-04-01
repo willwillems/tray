@@ -1,6 +1,7 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
 
+const base = import.meta.env.BASE_URL;
 const features = [
   { name: "Parts with categories, tags, and parameters", desc: "Organize your inventory the way you think about it" },
   { name: "Multi-location stock tracking", desc: "Know what you have, where it is, and when you're running low" },
@@ -28,7 +29,7 @@ const features = [
       </p>
       <div class="mt-8 flex gap-3">
         <a
-          href="/docs"
+          href={`${base}/docs`}
           class="inline-flex items-center rounded-full bg-fg px-5 py-2 text-sm font-medium text-bg transition-opacity hover:opacity-90"
         >
           Get Started
