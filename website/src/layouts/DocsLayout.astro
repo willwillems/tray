@@ -1,0 +1,57 @@
+---
+import BaseLayout from "./BaseLayout.astro";
+
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+
+const sidebarLinks = [
+  { label: "Getting Started", slug: "index" },
+  { label: "Installation", slug: "installation" },
+  { label: "Parts", slug: "parts" },
+  { label: "Stock", slug: "stock" },
+  { label: "Suppliers", slug: "suppliers" },
+  { label: "Projects", slug: "projects" },
+  { label: "KiCad", slug: "kicad" },
+  { label: "Import & Export", slug: "import-export" },
+  { label: "Backup", slug: "backup" },
+  { label: "Plugins", slug: "plugins" },
+  { label: "Architecture", slug: "architecture" },
+];
+
+const currentPath = Astro.url.pathname.replace(/\/$/, "");
+---
+
+<BaseLayout title={`${title} - Tray Docs`}>
+  <div class="mx-auto flex max-w-4xl gap-12 px-6 py-12">
+    <!-- Sidebar -->
+    <nav class="hidden w-48 shrink-0 md:block">
+      <ul class="sticky top-20 space-y-2 text-sm">
+        {sidebarLinks.map((link) => {
+          const href = link.slug === "index" ? "/docs" : `/docs/${link.slug}`;
+          const isActive = currentPath === href || currentPath === href + "/";
+          return (
+            <li>
+              <a
+                href={href}
+                class:list={[
+                  "block transition-colors",
+                  isActive ? "text-fg font-medium" : "text-muted hover:text-fg",
+                ]}
+              >
+                {link.label}
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+
+    <!-- Content -->
+    <article class="prose prose-invert min-w-0 max-w-none flex-1">
+      <slot />
+    </article>
+  </div>
+</BaseLayout>

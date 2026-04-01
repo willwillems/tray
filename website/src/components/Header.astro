@@ -1,0 +1,25 @@
+---
+const navLinks = [
+  { label: "Docs", href: "/docs" },
+  { label: "Changelog", href: "https://github.com/willwillems/tray/releases" },
+  { label: "GitHub", href: "https://github.com/willwillems/tray" },
+];
+---
+
+<header class="sticky top-0 z-50 bg-bg/80 backdrop-blur-sm">
+  <nav class="mx-auto flex max-w-2xl items-center justify-between px-6 py-3">
+    <a href="/" class="text-lg font-semibold tracking-tight">tray</a>
+    <div class="flex items-center gap-6 text-sm text-muted">
+      {navLinks.map((link) => (
+        <a
+          href={link.href}
+          class="transition-colors hover:text-fg"
+          target={link.href.startsWith("http") ? "_blank" : undefined}
+          rel={link.href.startsWith("http") ? "noopener noreferrer" : undefined}
+        >
+          {link.label}
+        </a>
+      ))}
+    </div>
+  </nav>
+</header>

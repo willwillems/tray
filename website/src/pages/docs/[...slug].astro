@@ -1,0 +1,22 @@
+---
+import { getCollection, render } from "astro:content";
+import DocsLayout from "../../layouts/DocsLayout.astro";
+
+export async function getStaticPaths() {
+  const docs = await getCollection("docs");
+  return docs.map((entry) => ({
+    params: { slug: entry.id === "index" ? undefined : entry.id },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+
+// Extract title from first H1 in the markdown, or fall back to the id
+const title = entry.data?.title || entry.id.replace(/-/g, " ").replace(/^\w/, (c: string) => c.toUpperCase());
+---
+
+<DocsLayout title={title}>
+  <Content />
+</DocsLayout>

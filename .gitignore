@@ -4,6 +4,8 @@ node_modules/
 
 # Build output
 tray
+website/dist/
+website/.astro/
 *.db
 *.db-wal
 *.db-shm
