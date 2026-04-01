@@ -1,0 +1,12 @@
+{
+  "name": "@tray/api",
+  "version": "0.1.0",
+  "exports": "./src/mod.ts",
+  "imports": {
+    "@tray/core": "../core/src/mod.ts",
+    "kysely": "jsr:@kysely/kysely@^0.28",
+    "hono": "jsr:@hono/hono@^4",
+    "@hono/zod-validator": "jsr:@hono/zod-validator",
+    "zod": "jsr:@zod/zod"
+  }
+}

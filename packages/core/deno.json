@@ -1,0 +1,10 @@
+{
+  "name": "@tray/core",
+  "version": "0.1.0",
+  "exports": "./src/mod.ts",
+  "imports": {
+    "kysely": "jsr:@kysely/kysely@^0.28",
+    "zod": "jsr:@zod/zod",
+    "imagescript": "https://deno.land/x/imagescript@1.3.0/mod.ts"
+  }
+}

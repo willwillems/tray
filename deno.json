@@ -1,0 +1,17 @@
+{
+  "workspace": ["./packages/core", "./packages/api", "./packages/cli"],
+  "imports": {
+    "@tray/core": "./packages/core/src/mod.ts",
+    "@tray/api": "./packages/api/src/mod.ts"
+  },
+  "tasks": {
+    "dev": "deno run -A packages/cli/src/mod.ts",
+    "check": "deno check packages/*/src/**/*.ts",
+    "lint": "deno lint",
+    "test": "deno test -A --parallel",
+    "test:core": "deno test -A packages/core/",
+    "test:api": "deno test -A packages/api/",
+    "test:e2e": "deno test -A packages/cli/",
+    "compile": "deno compile -A --output ./tray packages/cli/src/mod.ts"
+  }
+}
