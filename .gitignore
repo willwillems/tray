@@ -3,7 +3,7 @@ deno.lock
 node_modules/
 
 # Build output
-tray
+/tray
 website/dist/
 website/.astro/
 *.db

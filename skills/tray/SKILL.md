@@ -1,0 +1,162 @@
+---
+name: tray
+description: Manage a parts inventory using the Tray CLI. Use when the user needs to add parts, track stock, search inventory, manage suppliers, build projects, import/export data, or integrate with KiCad. Triggers include mentions of parts, components, inventory, stock, BOM, bill of materials, KiCad, or the tray command.
+license: MIT
+compatibility: Requires the tray binary installed and available on PATH.
+metadata:
+  author: willwillems
+  version: "0.1.0"
+---
+
+# Tray CLI
+
+Tray is a CLI-first parts inventory tool. Every operation is a command. Output defaults to a human-readable table in TTY, or JSON when piped. Use `--format json` to force JSON output for parsing.
+
+The database is at `~/.tray/data.db` by default. Override with `TRAY_DB` env var or `--db` flag.
+
+## Parts
+
+```bash
+# Add a part
+tray add "NE555" --category "ICs/Timers" --stock 25 --manufacturer "TI" --mpn "NE555P" --tags "timer,dip"
+
+# List all parts
+tray list
+
+# Filter
+tray list --category "ICs"           # includes all subcategories
+tray list --tag "smd"
+tray list --manufacturer "TI"
+tray list --low                      # stock <= min_stock
+tray list --favorites
+
+# Search (FTS5 full-text, prefix matching)
+tray search "555"
+tray search "timer"
+
+# Show detail
+tray show NE555
+tray show 1                          # by ID
+
+# Edit
+tray edit 1 --description "Timer IC" --tags "timer,smd" --min-stock 5
+
+# Delete
+tray rm 1
+```
+
+Categories are slash-delimited and auto-created: `--category "ICs/Timers"` creates both "ICs" and "Timers" if they don't exist.
+
+## Stock
+
+Stock is lot-based. Every unit lives in a lot with a quantity, location, and status.
+
+```bash
+# Add stock (creates or merges into existing lot)
+tray stock add NE555 --qty 50
+tray stock add NE555 --qty 25 --location "Lab/Shelf 1/Drawer 3"
+
+# Adjust (requires a reason for the audit trail)
+tray stock adjust NE555 --qty -5 --reason "used in prototype"
+
+# Move between locations
+tray stock move NE555 --qty 10 --from "Shelf 1" --to "Shelf 2"
+
+# View lots for a part
+tray stock list NE555
+
+# Show all parts below minimum stock
+tray stock low
+```
+
+Locations are slash-delimited and auto-created, like categories.
+
+## Suppliers and Pricing
+
+```bash
+# Add a supplier
+tray supplier add "DigiKey" --url "https://digikey.com"
+
+# Link a part to a supplier with SKU and price
+tray supplier link NE555 1 --sku "296-1411-5-ND" --price 0.58
+
+# Find the best price across all suppliers
+tray supplier buy NE555 --qty 100
+
+# List suppliers
+tray supplier list
+```
+
+## Projects and BOMs
+
+```bash
+# Create a project
+tray project add "Synth VCO" --description "VCO oscillator module"
+
+# Add parts to the BOM
+tray project bom-add 1 NE555 --qty 2 --refs "U1,U2"
+tray project bom-add 1 "10k Resistor" --qty 8 --refs "R1-R8"
+
+# View project with BOM and availability
+tray project show 1
+
+# Check if you can build N units
+tray project check 1 --qty 5
+
+# Build (deducts stock for all BOM lines * quantity)
+tray project build 1 --qty 5 --complete
+
+# Import a KiCad BOM CSV into a project
+tray bom-import 1 kicad-bom.csv
+```
+
+## Attachments
+
+```bash
+tray attach NE555 ~/datasheets/ne555.pdf
+tray attachments NE555
+tray detach 1
+```
+
+## Import and Export
+
+```bash
+# Export
+tray export --format csv > inventory.csv
+tray export --format json > inventory.json
+tray export --format csv --category "ICs" > ics-only.csv
+
+# Import
+tray import parts.csv
+tray import parts.json
+```
+
+## Backup and Restore
+
+```bash
+tray backup                                  # auto-named timestamped file
+tray backup ~/backups/inventory.db           # specific path
+tray restore ~/backups/inventory.db --yes    # full replacement
+```
+
+## KiCad Integration
+
+```bash
+# Start the HTTP server (serves both API and KiCad HTTP Library)
+tray serve --port 8080
+
+# Generate a .kicad_httplib config file for KiCad
+tray kicad config > ~/my-inventory.kicad_httplib
+```
+
+Add the `.kicad_httplib` file to KiCad's symbol library manager. Your inventory categories appear as libraries in the Symbol Chooser.
+
+## Output Formats
+
+All commands support `--format json`, `--format csv`, or `--format table`. When stdout is piped, JSON is used automatically. Always use `--format json` when you need to parse output programmatically.
+
+```bash
+# Parse JSON output
+tray show NE555 --format json | jq '.stock'
+tray list --format json | jq '.[].name'
+```
