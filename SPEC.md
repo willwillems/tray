@@ -679,26 +679,39 @@ After PCB design: export BOM from KiCad (XML/CSV) -> `tray bom import project --
 
 ### 6.17 Plugins
 
-**Script plugins (ship in v1):**
-- Any executable in `~/.tray/plugins/` named `tray-<name>`.
-- Language-agnostic: shell, Python, Go, Rust, Deno, whatever.
-- Tray passes environment variables: `TRAY_DB` (database path), `TRAY_API` (API base URL), `TRAY_CONFIG` (config file path).
-- Plugins can use the SQLite file directly or call the HTTP API.
-- Discovery: `tray digikey fetch NE555` -> finds `~/.tray/plugins/tray-digikey`, execs it with args `fetch NE555`.
-- Same pattern as git (git-lfs is just a binary that git discovers and calls).
+**TypeScript plugins (Vite-style, config-as-code):**
+- Plugins are TypeScript modules that export a function returning a `TrayPlugin` object.
+- Registered in `~/.tray/config.ts` (TypeScript config file, like Vite/ESLint flat config).
+- Plugins can: add custom CLI commands, hook into lifecycle events (fire-and-forget).
+- Plugin context provides direct database access (`Kysely<Database>`) and the Hono RPC client.
+- Plugin errors are logged but never block or crash the main operation.
 
-**TypeScript plugins (later):**
-- TS/JS modules in `~/.tray/plugins/<name>/mod.ts`.
-- Import a `@tray/plugin` SDK defining the plugin interface.
-- Can: add CLI commands, hook into lifecycle events (part:created, stock:adjusted, etc.), extend web UI with custom panels.
-- For deeper integrations that need type safety and access to core internals.
-
-**Plugin management:**
+**Plugin interface:**
+```typescript
+interface TrayPlugin {
+  name: string;
+  commands?: Record<string, CommandHandler>;
+  onPartCreated?:    (ctx: PluginContext, part: PartWithDetails) => Promise<void>;
+  onPartUpdated?:    (ctx: PluginContext, part: PartWithDetails, old: Part) => Promise<void>;
+  onPartDeleted?:    (ctx: PluginContext, partId: number) => Promise<void>;
+  onStockChanged?:   (ctx: PluginContext, partId: number, oldStock: number, newStock: number) => Promise<void>;
+  onLowStock?:       (ctx: PluginContext, part: PartWithDetails) => Promise<void>;
+  onBuildCompleted?: (ctx: PluginContext, buildOrder: BuildOrder) => Promise<void>;
+}
 ```
-tray plugin add https://github.com/tray-plugins/digikey    # Clone repo
-tray plugin add ./my-local-plugin                           # Symlink local dir
-tray plugin list
-tray plugin remove digikey
+
+**Config file (`~/.tray/config.ts`):**
+```typescript
+import type { TrayConfig } from "@tray/core";
+import digikey from "./plugins/digikey.ts";
+import slackNotify from "./plugins/slack.ts";
+
+export default {
+  plugins: [
+    digikey({ apiKey: Deno.env.get("DIGIKEY_API_KEY")! }),
+    slackNotify({ webhook: "https://hooks.slack.com/..." }),
+  ],
+} satisfies TrayConfig;
 ```
 
 **Plugin examples (community/ecosystem):**

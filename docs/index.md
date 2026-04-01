@@ -40,6 +40,7 @@ tray project build 1 --qty 5 --complete
 | [KiCad](./kicad.md) | Using Tray as a KiCad symbol library |
 | [Import & Export](./import-export.md) | CSV/JSON import and export, KiCad BOM import |
 | [Backup](./backup.md) | Database backup and restore |
+| [Plugins](./plugins.md) | TypeScript plugin system, hooks, custom commands |
 | [Architecture](./architecture.md) | How Tray works, API reference, development guide |
 
 ## Design Principles

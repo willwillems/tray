@@ -201,3 +201,12 @@ export type { ExportOptions, ImportResult } from "./import_export.ts";
 
 // Backup/Restore
 export { createBackup, restoreBackup } from "./backup.ts";
+
+// Plugins
+export { PluginEngine, createPluginEngine, loadPluginConfig } from "./plugins.ts";
+export type {
+  CommandHandler,
+  PluginContext,
+  TrayConfig,
+  TrayPlugin,
+} from "./plugins.ts";

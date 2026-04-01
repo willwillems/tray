@@ -239,3 +239,4 @@ const base64 = btoa(String.fromCharCode(...jpeg));
 - Do NOT parse CLI table output in tests. Use `--format json`.
 - Do NOT skip the audit log. Every mutation must be logged.
 - Do NOT assume local mode. The CLI code should work identically whether the server is in-process or remote.
+- Do NOT forget to update documentation. After every feature is developed, update the relevant docs in `/docs` and the doc index. Documentation is a deliverable, not an afterthought.
