@@ -1,6 +1,6 @@
 {
   "name": "@tray/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "exports": "./src/mod.ts",
   "imports": {
     "kysely": "jsr:@kysely/kysely@^0.28",

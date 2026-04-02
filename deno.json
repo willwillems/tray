@@ -1,6 +1,10 @@
 {
-  "version": "0.1.0",
-  "workspace": ["./packages/core", "./packages/api", "./packages/cli"],
+  "version": "0.1.1",
+  "workspace": [
+    "./packages/core",
+    "./packages/api",
+    "./packages/cli"
+  ],
   "imports": {
     "@tray/core": "./packages/core/src/mod.ts",
     "@tray/api": "./packages/api/src/mod.ts"
