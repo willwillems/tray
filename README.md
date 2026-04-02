@@ -76,6 +76,14 @@ packages/
   web/      SPA served by api (planned).
 ```
 
+## Agent Skill
+
+Install the [Tray skill](https://skills.sh) so your AI coding agent knows how to use the CLI:
+
+```bash
+npx skills add willwillems/tray
+```
+
 ## Docs
 
 - [SPEC.md](./SPEC.md) -- Full project specification: features, data model, architecture, decisions
