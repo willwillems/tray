@@ -110,6 +110,41 @@ tray project build 1 --qty 5 --complete
 tray bom-import 1 kicad-bom.csv
 ```
 
+## Purchase Orders
+
+Purchase orders track "I ordered these parts from this supplier -- have they arrived?"
+
+```bash
+# Create a PO for a supplier (by name or ID)
+tray po create --supplier "Mouser" --notes "Synth VCO restock"
+
+# Add lines by part name. If no supplier link exists, one is auto-created.
+# Prices auto-fill from existing price breaks.
+tray po add 1 "NE555" --qty 100
+tray po add 1 "LM7805" --qty 50 --price 0.45 --currency EUR
+
+# Review the PO with lines and totals
+tray po show 1
+
+# Mark as ordered (after placing the order on the supplier's website)
+tray po submit 1
+
+# Receive all outstanding lines at once
+tray po receive 1 --location "Shelf A"
+
+# Or receive a specific line (partial shipments)
+tray po receive 1 --line 3 --qty 50 --location "Incoming"
+
+# List POs, optionally filtered by status
+tray po list
+tray po list --status ordered
+
+# Cancel a PO
+tray po cancel 1
+```
+
+Status flow: `draft` -> `ordered` -> `partial` -> `received` (or `cancelled`). Receiving automatically creates stock lots and transitions the PO status. When adding lines, parts are resolved to the PO's supplier automatically -- if no supplier-part link exists, one is created with a notice.
+
 ## Attachments
 
 ```bash

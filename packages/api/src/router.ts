@@ -73,7 +73,8 @@ import {
   listPurchaseOrders,
   addPoLine,
   receivePOLine,
-  updatePurchaseOrderStatus,
+  resolveSupplier,
+  updatePurchaseOrder,
   getKicadRoot,
   getKicadCategories,
   getKicadPartsForCategory,
@@ -754,11 +755,23 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
     // --- Purchase Orders ---
     .post(
       "/api/purchase-orders",
-      zValidator("json", z.object({ supplier_id: z.number().int().positive(), notes: z.string().optional() })),
+      zValidator("json", z.object({
+        supplier_id: z.number().int().positive().optional(),
+        supplier: z.string().optional(),
+        notes: z.string().optional(),
+      })),
       async (c) => {
         const input = c.req.valid("json");
         try {
-          const po = await createPurchaseOrder(c.get("db"), input);
+          let supplierId = input.supplier_id;
+          if (!supplierId && input.supplier) {
+            const resolved = await resolveSupplier(c.get("db"), input.supplier);
+            supplierId = resolved.id;
+          }
+          if (!supplierId) {
+            return c.json({ error: "validation", message: "Either supplier_id or supplier (name) is required" }, 400);
+          }
+          const po = await createPurchaseOrder(c.get("db"), { supplier_id: supplierId, notes: input.notes });
           return c.json(po, 201);
         } catch (e) {
           return c.json({ error: "not_found", message: (e as Error).message }, 400);
@@ -777,10 +790,29 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
       if (!po) return c.json({ error: "not_found", message: `Purchase order ${id} not found` }, 404);
       return c.json(po);
     })
+    .patch(
+      "/api/purchase-orders/:id",
+      zValidator("json", z.object({
+        status: z.enum(["draft", "ordered", "partial", "received", "cancelled"]).optional(),
+        notes: z.string().optional(),
+      })),
+      async (c) => {
+        const id = parseInt(c.req.param("id"), 10);
+        if (isNaN(id)) return c.json({ error: "invalid_id", message: "PO ID must be a number" }, 400);
+        const input = c.req.valid("json");
+        try {
+          const po = await updatePurchaseOrder(c.get("db"), id, input);
+          return c.json(po);
+        } catch (e) {
+          return c.json({ error: "not_found", message: (e as Error).message }, 400);
+        }
+      },
+    )
     .post(
       "/api/purchase-orders/:id/lines",
       zValidator("json", z.object({
-        supplier_part_id: z.number().int().positive(),
+        supplier_part_id: z.number().int().positive().optional(),
+        part_id: z.number().int().positive().optional(),
         quantity_ordered: z.number().int().positive(),
         unit_price: z.number().optional(),
         currency: z.string().default("USD"),
@@ -789,8 +821,14 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
         const poId = parseInt(c.req.param("id"), 10);
         if (isNaN(poId)) return c.json({ error: "invalid_id", message: "PO ID must be a number" }, 400);
         const input = c.req.valid("json");
+        if (!input.supplier_part_id && !input.part_id) {
+          return c.json({ error: "validation", message: "Either supplier_part_id or part_id is required" }, 400);
+        }
         try {
-          const line = await addPoLine(c.get("db"), { purchase_order_id: poId, ...input });
+          const lineInput = input.supplier_part_id
+            ? { purchase_order_id: poId, supplier_part_id: input.supplier_part_id, quantity_ordered: input.quantity_ordered, unit_price: input.unit_price, currency: input.currency }
+            : { purchase_order_id: poId, part_id: input.part_id!, quantity_ordered: input.quantity_ordered, unit_price: input.unit_price, currency: input.currency };
+          const line = await addPoLine(c.get("db"), lineInput);
           return c.json(line, 201);
         } catch (e) {
           return c.json({ error: "not_found", message: (e as Error).message }, 400);

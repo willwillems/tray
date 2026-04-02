@@ -109,18 +109,41 @@ Tray matches BOM entries to parts by the `Value` column. Unmatched parts are rep
 When you need to replenish stock, create a purchase order:
 
 ```bash
-# Create a PO for DigiKey (supplier ID 1)
-# (Purchase order management is available via the API)
+# Create a PO for a supplier (by name or ID)
+tray po create --supplier "Mouser" --notes "Synth VCO restock"
+
+# Add lines -- parts are resolved to the supplier automatically.
+# If no supplier_part link exists, one is auto-created.
+# Prices auto-fill from existing price breaks.
+tray po add 1 "NE555" --qty 100
+tray po add 1 "LM7805" --qty 50 --price 0.45
+
+# Review the PO
+tray po show 1
+
+# Mark as ordered (after placing the order on the supplier's website)
+tray po submit 1
+
+# Receive items when they arrive
+tray po receive 1 --location "Shelf A"              # receive all outstanding
+tray po receive 1 --line 3 --qty 50 --location "Bin" # receive a specific line
+
+# List POs, optionally filtered by status
+tray po list
+tray po list --status ordered
+
+# Cancel a PO
+tray po cancel 1
 ```
 
 The PO workflow:
 1. Create a PO for a supplier (`draft`)
-2. Add PO lines referencing supplier parts with quantities
+2. Add PO lines by part name -- supplier links and pricing are handled automatically
 3. Mark as `ordered` when you place the order
 4. Receive items as they arrive -- stock is added automatically
 5. PO transitions to `partial` then `received` as lines are fulfilled
 
-Receiving a PO line automatically calls `stock add` for the corresponding part, so your inventory stays current.
+Receiving a PO line automatically creates stock lots for the corresponding part, so your inventory stays current. Partial receiving is fully supported -- receive what arrived and leave the rest.
 
 ## Full Workflow Example
 

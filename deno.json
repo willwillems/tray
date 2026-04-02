@@ -1,4 +1,5 @@
 {
+  "version": "0.1.0",
   "workspace": ["./packages/core", "./packages/api", "./packages/cli"],
   "imports": {
     "@tray/core": "./packages/core/src/mod.ts",
@@ -12,6 +13,7 @@
     "test:core": "deno test -A packages/core/",
     "test:api": "deno test -A packages/api/",
     "test:e2e": "deno test -A packages/cli/",
-    "compile": "deno compile -A --output ./tray packages/cli/src/mod.ts"
+    "compile": "deno compile -A --output ./tray packages/cli/src/mod.ts",
+    "version:bump": "deno run -A scripts/bump-version.ts"
   }
 }

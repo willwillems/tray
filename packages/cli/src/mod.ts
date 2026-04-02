@@ -6,6 +6,7 @@
  */
 
 import { Command } from "@cliffy/command";
+import rootConfig from "../../../deno.json" with { type: "json" };
 import { addCommand } from "./commands/add.ts";
 import { listCommand } from "./commands/list.ts";
 import { showCommand } from "./commands/show.ts";
@@ -19,10 +20,11 @@ import { projectCommand } from "./commands/project.ts";
 import { serveCommand, kicadCommand } from "./commands/serve.ts";
 import { exportCommand, importCommand, bomImportCommand } from "./commands/io.ts";
 import { backupCommand, restoreCommand } from "./commands/backup.ts";
+import { poCommand } from "./commands/po.ts";
 
 const tray = new Command()
   .name("tray")
-  .version("0.1.0")
+  .version(rootConfig.version)
   .description("CLI-first inventory management for makers")
   .command("add", addCommand)
   .command("list", listCommand)
@@ -41,6 +43,7 @@ const tray = new Command()
   .command("export", exportCommand)
   .command("import", importCommand)
   .command("bom-import", bomImportCommand)
+  .command("po", poCommand)
   .command("backup", backupCommand)
   .command("restore", restoreCommand);
 

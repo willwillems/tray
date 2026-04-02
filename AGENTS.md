@@ -230,6 +230,27 @@ const base64 = btoa(String.fromCharCode(...jpeg));
 
 ---
 
+## Versioning
+
+The project version lives in one place: the root `deno.json` `"version"` field. Everything else derives from it.
+
+The CLI reads it via a JSON import (`import rootConfig from "../../../deno.json" with { type: "json" }`), so `tray --version` is always in sync. The package `deno.json` files and skill frontmatter are kept in sync by the bump script.
+
+**To release a new version:**
+
+```bash
+deno task version:bump patch    # 0.1.0 -> 0.1.1
+deno task version:bump minor    # 0.1.0 -> 0.2.0
+deno task version:bump major    # 0.1.0 -> 1.0.0
+deno task version:bump 2.0.0    # explicit version
+```
+
+This updates all 5 locations (root `deno.json`, 3 package `deno.json` files, `skills/tray/SKILL.md`), creates a git commit, and tags it. Run `git push --tags` to publish.
+
+Do NOT hardcode version strings anywhere. If you need the version in code, import it from the root `deno.json`.
+
+---
+
 ## What NOT to Do
 
 - Do NOT add business logic in `cli/`. The CLI is a thin HTTP client + output formatter.
@@ -239,4 +260,4 @@ const base64 = btoa(String.fromCharCode(...jpeg));
 - Do NOT parse CLI table output in tests. Use `--format json`.
 - Do NOT skip the audit log. Every mutation must be logged.
 - Do NOT assume local mode. The CLI code should work identically whether the server is in-process or remote.
-- Do NOT forget to update documentation. After every feature is developed, update the relevant docs in `/docs` and the doc index. Documentation is a deliverable, not an afterthought.
+- Do NOT forget to update documentation. After every feature is developed, update the relevant docs in `/docs`, the doc index, AND the skill file at `skills/tray/SKILL.md`. The skill file is the external-facing reference for how to use the CLI -- it must stay in sync with implemented commands. Documentation is a deliverable, not an afterthought.

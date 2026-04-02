@@ -8,10 +8,12 @@
 import type { Kysely } from "kysely";
 import { recordAudit } from "./audit.ts";
 import { addStock } from "./stock.ts";
+import { createSupplierPart, getPriceBreaks } from "./suppliers.ts";
 import type {
   Database,
   PoLine,
   PurchaseOrder,
+  Supplier,
 } from "./schema.ts";
 
 // ---------------------------------------------------------------------------
@@ -112,40 +114,231 @@ export async function updatePurchaseOrderStatus(
   return updated;
 }
 
+/**
+ * Update a purchase order's mutable fields (status, notes).
+ */
+export async function updatePurchaseOrder(
+  db: Kysely<Database>,
+  id: number,
+  input: { status?: string; notes?: string },
+): Promise<PurchaseOrder> {
+  const existing = await db.selectFrom("purchase_orders").selectAll().where("id", "=", id).executeTakeFirst();
+  if (!existing) throw new Error(`Purchase order ${id} not found`);
+
+  const updates: Record<string, unknown> = {};
+  if (input.status !== undefined) updates.status = input.status;
+  if (input.notes !== undefined) updates.notes = input.notes;
+
+  if (Object.keys(updates).length === 0) return existing;
+
+  const updated = await db
+    .updateTable("purchase_orders")
+    .set(updates)
+    .where("id", "=", id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  const oldValues: Record<string, unknown> = {};
+  const newValues: Record<string, unknown> = {};
+  if (input.status !== undefined) {
+    oldValues.status = existing.status;
+    newValues.status = input.status;
+  }
+  if (input.notes !== undefined) {
+    oldValues.notes = existing.notes;
+    newValues.notes = input.notes;
+  }
+
+  await recordAudit(db, {
+    entity_type: "purchase_order",
+    entity_id: id,
+    action: "update",
+    old_values: oldValues,
+    new_values: newValues,
+  });
+
+  return updated;
+}
+
+// ---------------------------------------------------------------------------
+// Supplier / Part Resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a supplier by name or numeric ID string.
+ * Throws if not found.
+ */
+export async function resolveSupplier(
+  db: Kysely<Database>,
+  nameOrId: string,
+): Promise<Supplier> {
+  // Try numeric ID first
+  const asNum = Number(nameOrId);
+  if (Number.isInteger(asNum) && asNum > 0) {
+    const byId = await db.selectFrom("suppliers").selectAll().where("id", "=", asNum).executeTakeFirst();
+    if (byId) return byId;
+  }
+
+  // Try exact name match (case-insensitive)
+  const byName = await db
+    .selectFrom("suppliers")
+    .selectAll()
+    .where((eb) => eb.fn("lower", ["name"]), "=", nameOrId.toLowerCase())
+    .executeTakeFirst();
+  if (byName) return byName;
+
+  throw new Error(`Supplier '${nameOrId}' not found`);
+}
+
+/**
+ * Find an existing supplier_part for a part+supplier combo, or create one.
+ * Returns { supplier_part_id, created } so callers can report auto-linking.
+ */
+async function resolveOrCreateSupplierPart(
+  db: Kysely<Database>,
+  partId: number,
+  supplierId: number,
+): Promise<{ supplier_part_id: number; created: boolean }> {
+  // Look for existing link
+  const existing = await db
+    .selectFrom("supplier_parts")
+    .select("id")
+    .where("part_id", "=", partId)
+    .where("supplier_id", "=", supplierId)
+    .executeTakeFirst();
+
+  if (existing) return { supplier_part_id: existing.id, created: false };
+
+  // Auto-create a minimal supplier_part link
+  const sp = await createSupplierPart(db, {
+    part_id: partId,
+    supplier_id: supplierId,
+  });
+
+  return { supplier_part_id: sp.id, created: true };
+}
+
+/**
+ * Look up the best price break for a supplier_part at a given quantity.
+ * Returns the unit price and currency, or undefined if no breaks exist.
+ */
+async function autoFillPrice(
+  db: Kysely<Database>,
+  supplierPartId: number,
+  quantity: number,
+): Promise<{ unit_price: number; currency: string } | undefined> {
+  const breaks = await getPriceBreaks(db, supplierPartId);
+  if (breaks.length === 0) return undefined;
+
+  // Find the applicable break: largest min_quantity <= requested qty
+  const applicable = breaks
+    .filter((pb) => pb.min_quantity <= quantity)
+    .sort((a, b) => b.min_quantity - a.min_quantity);
+
+  if (applicable.length === 0) return undefined;
+  return { unit_price: applicable[0].price, currency: applicable[0].currency };
+}
+
 // ---------------------------------------------------------------------------
 // PO Lines
 // ---------------------------------------------------------------------------
 
+/** Result of adding a PO line, with extra context for the caller. */
+export interface AddPoLineResult extends PoLine {
+  part_name: string;
+  supplier_part_sku: string | null;
+  supplier_part_created: boolean;
+  price_auto_filled: boolean;
+}
+
+/**
+ * Add a line to a purchase order.
+ *
+ * Accepts either `supplier_part_id` (direct) or `part_id` (resolved
+ * server-side to the supplier_part for this PO's supplier, auto-creating
+ * the link if needed). When `part_id` is used and no explicit `unit_price`
+ * is provided, price is auto-filled from price breaks.
+ */
 export async function addPoLine(
   db: Kysely<Database>,
   input: {
     purchase_order_id: number;
-    supplier_part_id: number;
     quantity_ordered: number;
     unit_price?: number;
     currency?: string;
-  },
-): Promise<PoLine> {
-  // Verify PO exists
-  const po = await db.selectFrom("purchase_orders").select("id").where("id", "=", input.purchase_order_id).executeTakeFirst();
+  } & ({ supplier_part_id: number } | { part_id: number }),
+): Promise<AddPoLineResult> {
+  // Verify PO exists and get supplier_id
+  const po = await db.selectFrom("purchase_orders").selectAll()
+    .where("id", "=", input.purchase_order_id).executeTakeFirst();
   if (!po) throw new Error(`Purchase order ${input.purchase_order_id} not found`);
 
-  // Verify supplier part exists
-  const sp = await db.selectFrom("supplier_parts").select("id").where("id", "=", input.supplier_part_id).executeTakeFirst();
-  if (!sp) throw new Error(`Supplier part ${input.supplier_part_id} not found`);
+  let supplierPartId: number;
+  let supplierPartCreated = false;
 
-  return await db
+  if ("supplier_part_id" in input && input.supplier_part_id !== undefined) {
+    // Direct supplier_part_id -- verify it exists
+    const sp = await db.selectFrom("supplier_parts").select("id")
+      .where("id", "=", input.supplier_part_id).executeTakeFirst();
+    if (!sp) throw new Error(`Supplier part ${input.supplier_part_id} not found`);
+    supplierPartId = input.supplier_part_id;
+  } else if ("part_id" in input && input.part_id !== undefined) {
+    // Resolve part_id to supplier_part for this PO's supplier
+    const part = await db.selectFrom("parts").select("id")
+      .where("id", "=", input.part_id).executeTakeFirst();
+    if (!part) throw new Error(`Part ${input.part_id} not found`);
+
+    const resolved = await resolveOrCreateSupplierPart(db, input.part_id, po.supplier_id);
+    supplierPartId = resolved.supplier_part_id;
+    supplierPartCreated = resolved.created;
+  } else {
+    throw new Error("Either supplier_part_id or part_id is required");
+  }
+
+  // Auto-fill price from price breaks if not explicitly provided
+  let unitPrice = input.unit_price ?? null;
+  let currency = input.currency ?? null;
+  let priceAutoFilled = false;
+
+  if (unitPrice === null || unitPrice === undefined) {
+    const autoPrice = await autoFillPrice(db, supplierPartId, input.quantity_ordered);
+    if (autoPrice) {
+      unitPrice = autoPrice.unit_price;
+      currency = currency ?? autoPrice.currency;
+      priceAutoFilled = true;
+    }
+  }
+
+  if (currency === null && unitPrice !== null) {
+    currency = "USD"; // default currency when price is set
+  }
+
+  const line = await db
     .insertInto("po_lines")
     .values({
       purchase_order_id: input.purchase_order_id,
-      supplier_part_id: input.supplier_part_id,
+      supplier_part_id: supplierPartId,
       quantity_ordered: input.quantity_ordered,
       quantity_received: 0,
-      unit_price: input.unit_price ?? null,
-      currency: input.currency ?? null,
+      unit_price: unitPrice,
+      currency,
     })
     .returningAll()
     .executeTakeFirstOrThrow();
+
+  // Look up part name and SKU for the response
+  const sp = await db.selectFrom("supplier_parts")
+    .select(["part_id", "sku"]).where("id", "=", supplierPartId).executeTakeFirstOrThrow();
+  const part = await db.selectFrom("parts")
+    .select("name").where("id", "=", sp.part_id).executeTakeFirstOrThrow();
+
+  return {
+    ...line,
+    part_name: part.name,
+    supplier_part_sku: sp.sku,
+    supplier_part_created: supplierPartCreated,
+    price_auto_filled: priceAutoFilled,
+  };
 }
 
 /**

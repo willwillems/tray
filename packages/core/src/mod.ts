@@ -168,9 +168,12 @@ export {
   getPurchaseOrder,
   listPurchaseOrders,
   receivePOLine,
+  resolveSupplier,
+  updatePurchaseOrder,
   updatePurchaseOrderStatus,
 } from "./purchase_orders.ts";
 export type {
+  AddPoLineResult,
   PoLineWithDetails,
   PurchaseOrderWithDetails,
 } from "./purchase_orders.ts";

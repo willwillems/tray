@@ -28,7 +28,6 @@ import {
   addPoLine,
   createPurchaseOrder,
   getPurchaseOrder,
-  listPurchaseOrders,
   receivePOLine,
 } from "../src/purchase_orders.ts";
 
@@ -455,5 +454,260 @@ Deno.test("scenario: purchase order -> receive -> verify stock", async () => {
   await db.destroy();
 });
 
-// Import updatePurchaseOrderStatus for the test that needs it
-import { updatePurchaseOrderStatus } from "../src/purchase_orders.ts";
+// Import additional functions for tests
+import { updatePurchaseOrderStatus, resolveSupplier, updatePurchaseOrder } from "../src/purchase_orders.ts";
+import { addPriceBreak } from "../src/suppliers.ts";
+
+// --- New PO Features ---
+
+Deno.test("resolveSupplier - by ID", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "Mouser" });
+
+  const resolved = await resolveSupplier(db, String(supplier.id));
+  assertEquals(resolved.id, supplier.id);
+  assertEquals(resolved.name, "Mouser");
+
+  await db.destroy();
+});
+
+Deno.test("resolveSupplier - by name (case-insensitive)", async () => {
+  const db = await freshDb();
+  await createSupplier(db, { name: "DigiKey" });
+
+  const resolved = await resolveSupplier(db, "digikey");
+  assertEquals(resolved.name, "DigiKey");
+
+  await db.destroy();
+});
+
+Deno.test("resolveSupplier - not found throws", async () => {
+  const db = await freshDb();
+
+  await assertRejects(
+    () => resolveSupplier(db, "NonExistent"),
+    Error,
+    "not found",
+  );
+
+  await db.destroy();
+});
+
+Deno.test("addPoLine - with part_id auto-creates supplier_part link", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "AliExpress" });
+  const part = await createPart(db, { name: "10k Resistor" });
+
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+
+  // No supplier_part link exists yet -- addPoLine should create one
+  const line = await addPoLine(db, {
+    purchase_order_id: po.id,
+    part_id: part.id,
+    quantity_ordered: 200,
+  });
+
+  assertEquals(line.quantity_ordered, 200);
+  assertEquals(line.part_name, "10k Resistor");
+  assertEquals(line.supplier_part_created, true);
+  assertEquals(line.supplier_part_sku, null);
+  assertEquals(line.price_auto_filled, false);
+
+  await db.destroy();
+});
+
+Deno.test("addPoLine - with part_id uses existing supplier_part", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "Mouser" });
+  const part = await createPart(db, { name: "NE555" });
+  const sp = await createSupplierPart(db, {
+    part_id: part.id,
+    supplier_id: supplier.id,
+    sku: "595-NE555P",
+  });
+
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+  const line = await addPoLine(db, {
+    purchase_order_id: po.id,
+    part_id: part.id,
+    quantity_ordered: 100,
+  });
+
+  assertEquals(line.supplier_part_created, false);
+  assertEquals(line.supplier_part_sku, "595-NE555P");
+  assertEquals(line.supplier_part_id, sp.id);
+
+  await db.destroy();
+});
+
+Deno.test("addPoLine - auto-fills price from price breaks", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "Mouser" });
+  const part = await createPart(db, { name: "NE555" });
+  const sp = await createSupplierPart(db, {
+    part_id: part.id,
+    supplier_id: supplier.id,
+    sku: "595-NE555P",
+  });
+
+  // Add price breaks: qty 1 @ $0.80, qty 10 @ $0.58, qty 100 @ $0.45
+  await addPriceBreak(db, sp.id, { min_quantity: 1, price: 0.80, currency: "USD" });
+  await addPriceBreak(db, sp.id, { min_quantity: 10, price: 0.58, currency: "USD" });
+  await addPriceBreak(db, sp.id, { min_quantity: 100, price: 0.45, currency: "USD" });
+
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+
+  // Order 50 -- should get the qty 10 price break ($0.58)
+  const line = await addPoLine(db, {
+    purchase_order_id: po.id,
+    part_id: part.id,
+    quantity_ordered: 50,
+  });
+
+  assertEquals(line.unit_price, 0.58);
+  assertEquals(line.currency, "USD");
+  assertEquals(line.price_auto_filled, true);
+
+  await db.destroy();
+});
+
+Deno.test("addPoLine - explicit price overrides auto-fill", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "Mouser" });
+  const part = await createPart(db, { name: "NE555" });
+  const sp = await createSupplierPart(db, {
+    part_id: part.id,
+    supplier_id: supplier.id,
+    sku: "595-NE555P",
+  });
+  await addPriceBreak(db, sp.id, { min_quantity: 1, price: 0.80 });
+
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+  const line = await addPoLine(db, {
+    purchase_order_id: po.id,
+    part_id: part.id,
+    quantity_ordered: 50,
+    unit_price: 0.25, // override
+    currency: "EUR",
+  });
+
+  assertEquals(line.unit_price, 0.25);
+  assertEquals(line.currency, "EUR");
+  assertEquals(line.price_auto_filled, false);
+
+  await db.destroy();
+});
+
+Deno.test("updatePurchaseOrder - updates status and notes", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "DigiKey" });
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id, notes: "first" });
+
+  const updated = await updatePurchaseOrder(db, po.id, { status: "ordered", notes: "placed on website" });
+  assertEquals(updated.status, "ordered");
+  assertEquals(updated.notes, "placed on website");
+
+  await db.destroy();
+});
+
+Deno.test("updatePurchaseOrder - partial update (notes only)", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "DigiKey" });
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+
+  const updated = await updatePurchaseOrder(db, po.id, { notes: "added notes" });
+  assertEquals(updated.status, "draft"); // unchanged
+  assertEquals(updated.notes, "added notes");
+
+  await db.destroy();
+});
+
+Deno.test("scenario: AliExpress low-info PO workflow", async () => {
+  const db = await freshDb();
+
+  // Setup: supplier exists, parts exist, but NO supplier_part links
+  const ali = await createSupplier(db, { name: "AliExpress" });
+  const resistor = await createPart(db, { name: "10k Resistor" });
+  const cap = await createPart(db, { name: "100nF Cap" });
+
+  // Create PO
+  const po = await createPurchaseOrder(db, { supplier_id: ali.id, notes: "Quick bag order" });
+  assertEquals(po.status, "draft");
+
+  // Add lines using part_id -- supplier_parts auto-created
+  const line1 = await addPoLine(db, { purchase_order_id: po.id, part_id: resistor.id, quantity_ordered: 500 });
+  assertEquals(line1.supplier_part_created, true);
+  assertEquals(line1.part_name, "10k Resistor");
+
+  const line2 = await addPoLine(db, { purchase_order_id: po.id, part_id: cap.id, quantity_ordered: 200 });
+  assertEquals(line2.supplier_part_created, true);
+
+  // Submit
+  await updatePurchaseOrder(db, po.id, { status: "ordered" });
+
+  // Receive everything
+  await receivePOLine(db, { po_line_id: line1.id, quantity_received: 500, location: "Incoming" });
+  await receivePOLine(db, { po_line_id: line2.id, quantity_received: 200, location: "Incoming" });
+
+  // Verify
+  assertEquals((await getPart(db, resistor.id))!.stock, 500);
+  assertEquals((await getPart(db, cap.id))!.stock, 200);
+  assertEquals((await getPurchaseOrder(db, po.id))!.status, "received");
+
+  await db.destroy();
+});
+
+Deno.test("scenario: Mouser high-info PO with price auto-fill", async () => {
+  const db = await freshDb();
+
+  const mouser = await createSupplier(db, { name: "Mouser" });
+  const ne555 = await createPart(db, { name: "NE555" });
+  const lm7805 = await createPart(db, { name: "LM7805" });
+
+  // Pre-link with SKUs and price breaks
+  const sp1 = await createSupplierPart(db, { part_id: ne555.id, supplier_id: mouser.id, sku: "595-NE555P" });
+  await addPriceBreak(db, sp1.id, { min_quantity: 1, price: 0.80 });
+  await addPriceBreak(db, sp1.id, { min_quantity: 100, price: 0.58 });
+
+  const sp2 = await createSupplierPart(db, { part_id: lm7805.id, supplier_id: mouser.id, sku: "926-LM7805CT" });
+  await addPriceBreak(db, sp2.id, { min_quantity: 1, price: 0.65 });
+  await addPriceBreak(db, sp2.id, { min_quantity: 50, price: 0.45 });
+
+  // Create PO
+  const po = await createPurchaseOrder(db, { supplier_id: mouser.id, notes: "Synth VCO restock" });
+
+  // Add lines -- prices auto-fill from breaks
+  const line1 = await addPoLine(db, { purchase_order_id: po.id, part_id: ne555.id, quantity_ordered: 100 });
+  assertEquals(line1.unit_price, 0.58); // qty 100 break
+  assertEquals(line1.supplier_part_sku, "595-NE555P");
+  assertEquals(line1.supplier_part_created, false);
+  assertEquals(line1.price_auto_filled, true);
+
+  const line2 = await addPoLine(db, { purchase_order_id: po.id, part_id: lm7805.id, quantity_ordered: 50 });
+  assertEquals(line2.unit_price, 0.45); // qty 50 break
+  assertEquals(line2.supplier_part_sku, "926-LM7805CT");
+  assertEquals(line2.price_auto_filled, true);
+
+  // Show PO -- verify totals
+  const poDetails = await getPurchaseOrder(db, po.id);
+  assertExists(poDetails);
+  assertEquals(poDetails!.lines.length, 2);
+  assertEquals(poDetails!.total_cost, 100 * 0.58 + 50 * 0.45); // $58 + $22.50 = $80.50
+
+  // Submit and receive
+  await updatePurchaseOrder(db, po.id, { status: "ordered" });
+
+  // Partial receive: NE555 arrives, LM7805 backordered
+  await receivePOLine(db, { po_line_id: line1.id, quantity_received: 100, location: "Shelf A/ICs" });
+  assertEquals((await getPurchaseOrder(db, po.id))!.status, "partial");
+
+  // LM7805 arrives
+  await receivePOLine(db, { po_line_id: line2.id, quantity_received: 50, location: "Shelf A/Regulators" });
+  assertEquals((await getPurchaseOrder(db, po.id))!.status, "received");
+
+  // Final stock
+  assertEquals((await getPart(db, ne555.id))!.stock, 100);
+  assertEquals((await getPart(db, lm7805.id))!.stock, 50);
+
+  await db.destroy();
+});
