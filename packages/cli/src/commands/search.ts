@@ -3,8 +3,8 @@
  */
 
 import { Command } from "@cliffy/command";
-import { getClient, cleanup } from "../client.ts";
-import { output, outputError, detectFormat } from "../output/format.ts";
+import { withClient } from "../client.ts";
+import { output, assertOk } from "../output/format.ts";
 
 export const searchCommand = new Command()
   .name("search")
@@ -14,10 +14,10 @@ export const searchCommand = new Command()
   .option("--offset <n:integer>", "Skip results", { default: 0 })
   .option("--format <fmt:string>", "Output format: json, csv, table")
   .option("--db <path:string>", "Database path")
+  .example("Full-text search", "tray search 555")
+  .example("Search with limit", "tray search resistor --limit 10")
   .action(async (options, query) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api.search.$get({
         query: {
           q: query,
@@ -26,14 +26,9 @@ export const searchCommand = new Command()
         },
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("search_failed", (err as { message?: string }).message ?? "Search failed", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "search_failed", "Search failed");
 
       const results = await res.json();
-      // Flatten search results for display
       // deno-lint-ignore no-explicit-any
       const parts = (results as any[]).map((r) => ({
         ...r.part,
@@ -41,13 +36,8 @@ export const searchCommand = new Command()
         rank: r.rank,
       }));
       output(parts, {
-        format,
+        format: options.format,
         columns: ["id", "name", "stock", "manufacturer", "mpn", "tags"],
       });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });

@@ -11,8 +11,8 @@
  */
 
 import { Command } from "@cliffy/command";
-import { getClient, cleanup } from "../client.ts";
-import { output, outputError, detectFormat } from "../output/format.ts";
+import { withClient, resolvePart } from "../client.ts";
+import { output, assertOk } from "../output/format.ts";
 
 const projectAddCommand = new Command()
   .name("add")
@@ -22,18 +22,13 @@ const projectAddCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, name) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api.projects.$post({
         json: { name, description: options.description },
       });
-      if (!res.ok) { outputError("error", "Failed to create project", format); Deno.exit(1); }
-      output(await res.json(), { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally { await cleanup(); }
+      await assertOk(res, "error", "Failed to create project");
+      output(await res.json(), { format: options.format });
+    });
   });
 
 const projectListCommand = new Command()
@@ -44,21 +39,16 @@ const projectListCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const query: Record<string, string> = {};
       if (options.status) query.status = options.status;
       const res = await client.api.projects.$get({ query });
-      if (!res.ok) { outputError("error", "Failed", format); Deno.exit(1); }
+      await assertOk(res, "error", "Failed to list projects");
       output(await res.json(), {
-        format,
+        format: options.format,
         columns: ["id", "name", "status", "total_line_items"],
       });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally { await cleanup(); }
+    });
   });
 
 const projectShowCommand = new Command()
@@ -68,14 +58,12 @@ const projectShowCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, id) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api.projects[":id"].$get({ param: { id: String(id) } });
-      if (!res.ok) { outputError("not_found", `Project ${id} not found`, format); Deno.exit(1); }
+      await assertOk(res, "not_found", `Project ${id} not found`);
       const project = await res.json();
-      if (format === "json") {
-        output(project, { format });
+      if (options.format === "json") {
+        output(project, { format: options.format });
       } else {
         // deno-lint-ignore no-explicit-any
         const p = project as any;
@@ -91,10 +79,7 @@ const projectShowCommand = new Command()
           console.log("  (empty)");
         }
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally { await cleanup(); }
+    });
   });
 
 const bomAddCommand = new Command()
@@ -107,14 +92,8 @@ const bomAddCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, projectId, partIdOrName) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
-      // Resolve part
-      const partRes = await client.api.parts[":id"].$get({ param: { id: partIdOrName } });
-      if (!partRes.ok) { outputError("not_found", `Part '${partIdOrName}' not found`, format); Deno.exit(1); }
-      const part = await partRes.json();
+    await withClient(options.db, async (client) => {
+      const part = await resolvePart(client, partIdOrName);
 
       const res = await client.api.projects[":id"].bom.$post({
         param: { id: String(projectId) },
@@ -125,16 +104,9 @@ const bomAddCommand = new Command()
           notes: options.notes,
         },
       });
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed", format);
-        Deno.exit(1);
-      }
-      output(await res.json(), { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally { await cleanup(); }
+      await assertOk(res, "error", "Failed to add BOM line");
+      output(await res.json(), { format: options.format });
+    });
   });
 
 const checkCommand = new Command()
@@ -145,17 +117,15 @@ const checkCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, projectId) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api.projects[":id"].check.$get({
         param: { id: String(projectId) },
         query: { quantity: String(options.qty) },
       });
-      if (!res.ok) { outputError("error", "Failed", format); Deno.exit(1); }
+      await assertOk(res, "error", "Failed to check availability");
       const result = await res.json();
-      if (format === "json") {
-        output(result, { format });
+      if (options.format === "json") {
+        output(result, { format: options.format });
       } else {
         // deno-lint-ignore no-explicit-any
         const r = result as any;
@@ -167,10 +137,7 @@ const checkCommand = new Command()
           output(r.shortages, { format: "table", columns: ["part_name", "required", "available", "short"] });
         }
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally { await cleanup(); }
+    });
   });
 
 const buildCommand = new Command()
@@ -182,19 +149,12 @@ const buildCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, projectId) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
+    await withClient(options.db, async (client) => {
       // Create build order
       const createRes = await client.api.builds.$post({
         json: { project_id: projectId, quantity: options.qty },
       });
-      if (!createRes.ok) {
-        const err = await createRes.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed", format);
-        Deno.exit(1);
-      }
+      await assertOk(createRes, "error", "Failed to create build order");
       const build = await createRes.json();
 
       if (options.complete) {
@@ -202,24 +162,21 @@ const buildCommand = new Command()
         const completeRes = await client.api.builds[":id"].complete.$post({
           param: { id: String((build as { id: number }).id) },
         });
-        if (!completeRes.ok) {
-          const err = await completeRes.json();
-          outputError("build_error", (err as { message?: string }).message ?? "Failed to complete", format);
-          Deno.exit(1);
-        }
-        output(await completeRes.json(), { format });
+        await assertOk(completeRes, "build_error", "Failed to complete build");
+        output(await completeRes.json(), { format: options.format });
       } else {
-        output(build, { format });
+        output(build, { format: options.format });
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally { await cleanup(); }
+    });
   });
 
 export const projectCommand = new Command()
   .name("project")
   .description("Project and BOM management")
+  .example("Create a project", "tray project add 'Synth VCO' --description 'VCO module'")
+  .example("Add part to BOM", "tray project bom-add 1 NE555 --qty 3 --refs 'U1,U2,U3'")
+  .example("Check build feasibility", "tray project check 1 --qty 5")
+  .example("Build and deduct stock", "tray project build 1 --qty 2 --complete")
   .command("add", projectAddCommand)
   .command("list", projectListCommand)
   .command("show", projectShowCommand)

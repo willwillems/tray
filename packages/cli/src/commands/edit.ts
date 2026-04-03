@@ -3,8 +3,8 @@
  */
 
 import { Command } from "@cliffy/command";
-import { getClient, cleanup } from "../client.ts";
-import { output, outputError, detectFormat } from "../output/format.ts";
+import { withClient } from "../client.ts";
+import { output, assertOk, CliError } from "../output/format.ts";
 
 export const editCommand = new Command()
   .name("edit")
@@ -25,11 +25,10 @@ export const editCommand = new Command()
   .option("--datasheet <url:string>", "Datasheet URL")
   .option("--format <fmt:string>", "Output format: json, csv, table")
   .option("--db <path:string>", "Database path")
+  .example("Rename a part", "tray edit 1 --name 'NE555P Timer'")
+  .example("Update category and tags", "tray edit 1 --category 'ICs/Timers' --tags 'timer,oscillator'")
   .action(async (options, id) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
+    await withClient(options.db, async (client) => {
       // Build update payload -- only include provided fields
       // deno-lint-ignore no-explicit-any
       const updates: Record<string, any> = {};
@@ -48,8 +47,7 @@ export const editCommand = new Command()
       if (options.datasheet) updates.datasheet_url = options.datasheet;
 
       if (Object.keys(updates).length === 0) {
-        outputError("no_changes", "No fields to update. Use --name, --description, etc.", format);
-        Deno.exit(1);
+        throw new CliError("no_changes", "No fields to update. Use --name, --description, etc.");
       }
 
       const res = await client.api.parts[":id"].$patch({
@@ -57,18 +55,7 @@ export const editCommand = new Command()
         json: updates,
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("update_failed", (err as { message?: string }).message ?? "Failed to update part", format);
-        Deno.exit(1);
-      }
-
-      const part = await res.json();
-      output(part, { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+      await assertOk(res, "update_failed", "Failed to update part");
+      output(await res.json(), { format: options.format });
+    });
   });

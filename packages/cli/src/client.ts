@@ -1,5 +1,5 @@
 /**
- * CLI client factory.
+ * CLI client factory and helpers.
  *
  * In local mode: boots an in-process Hono server (~2ms), creates hc client.
  * In remote mode: creates hc client pointing at remote URL.
@@ -10,6 +10,7 @@
 import { hc } from "hono/client";
 import { type AppType, createApp } from "@tray/api";
 import { setupDb } from "@tray/core";
+import { CliError } from "./output/format.ts";
 
 type HonoClient = ReturnType<typeof hc<AppType>>;
 export type { HonoClient as Client };
@@ -51,6 +52,39 @@ export async function getClient(
 }
 
 /**
+ * Run a function with a managed client lifecycle.
+ * Handles getClient + cleanup automatically so commands don't need
+ * try/finally boilerplate.
+ */
+export async function withClient<T>(
+  dbPath: string | undefined,
+  fn: (client: HonoClient) => Promise<T>,
+): Promise<T> {
+  try {
+    const client = await getClient({ dbPath });
+    return await fn(client);
+  } finally {
+    await cleanup();
+  }
+}
+
+/**
+ * Resolve a part by name or ID. Throws CliError if not found.
+ */
+export async function resolvePart(
+  client: HonoClient,
+  idOrName: string,
+): Promise<{ id: number; name: string; [key: string]: unknown }> {
+  const res = await client.api.parts[":id"].$get({
+    param: { id: idOrName },
+  });
+  if (!res.ok) {
+    throw new CliError("not_found", `Part '${idOrName}' not found`);
+  }
+  return await res.json() as { id: number; name: string };
+}
+
+/**
  * Raw fetch against the in-process app.
  * Used for multipart uploads that Hono RPC can't handle.
  */
@@ -76,7 +110,7 @@ export async function cleanup(): Promise<void> {
 /**
  * Determine the database path from env or default.
  */
-function getDbPath(): string {
+export function getDbPath(): string {
   // Check env vars
   const envPath = Deno.env.get("TRAY_DB");
   if (envPath) return envPath;

@@ -9,8 +9,8 @@
  */
 
 import { Command } from "@cliffy/command";
-import { getClient, cleanup } from "../client.ts";
-import { output, outputError, detectFormat } from "../output/format.ts";
+import { withClient, resolvePart } from "../client.ts";
+import { output, assertOk } from "../output/format.ts";
 
 const stockAddCommand = new Command()
   .name("add")
@@ -22,19 +22,8 @@ const stockAddCommand = new Command()
   .option("--format <fmt:string>", "Output format: json, csv, table")
   .option("--db <path:string>", "Database path")
   .action(async (options, partIdOrName) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
-      // Resolve part name to ID
-      const partRes = await client.api.parts[":id"].$get({
-        param: { id: partIdOrName },
-      });
-      if (!partRes.ok) {
-        outputError("not_found", `Part '${partIdOrName}' not found`, format);
-        Deno.exit(1);
-      }
-      const part = await partRes.json();
+    await withClient(options.db, async (client) => {
+      const part = await resolvePart(client, partIdOrName);
 
       const res = await client.api.stock.add.$post({
         json: {
@@ -45,20 +34,11 @@ const stockAddCommand = new Command()
         },
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("stock_error", (err as { message?: string }).message ?? "Failed to add stock", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "stock_error", "Failed to add stock");
 
       const lot = await res.json();
-      output(lot, { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+      output(lot, { format: options.format });
+    });
   });
 
 const stockAdjustCommand = new Command()
@@ -71,18 +51,8 @@ const stockAdjustCommand = new Command()
   .option("--format <fmt:string>", "Output format: json, csv, table")
   .option("--db <path:string>", "Database path")
   .action(async (options, partIdOrName) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
-      const partRes = await client.api.parts[":id"].$get({
-        param: { id: partIdOrName },
-      });
-      if (!partRes.ok) {
-        outputError("not_found", `Part '${partIdOrName}' not found`, format);
-        Deno.exit(1);
-      }
-      const part = await partRes.json();
+    await withClient(options.db, async (client) => {
+      const part = await resolvePart(client, partIdOrName);
 
       const res = await client.api.stock.adjust.$post({
         json: {
@@ -93,20 +63,11 @@ const stockAdjustCommand = new Command()
         },
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("stock_error", (err as { message?: string }).message ?? "Failed to adjust stock", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "stock_error", "Failed to adjust stock");
 
       const lot = await res.json();
-      output(lot, { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+      output(lot, { format: options.format });
+    });
   });
 
 const stockMoveCommand = new Command()
@@ -119,18 +80,8 @@ const stockMoveCommand = new Command()
   .option("--format <fmt:string>", "Output format: json, csv, table")
   .option("--db <path:string>", "Database path")
   .action(async (options, partIdOrName) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
-      const partRes = await client.api.parts[":id"].$get({
-        param: { id: partIdOrName },
-      });
-      if (!partRes.ok) {
-        outputError("not_found", `Part '${partIdOrName}' not found`, format);
-        Deno.exit(1);
-      }
-      const part = await partRes.json();
+    await withClient(options.db, async (client) => {
+      const part = await resolvePart(client, partIdOrName);
 
       const res = await client.api.stock.move.$post({
         json: {
@@ -141,20 +92,11 @@ const stockMoveCommand = new Command()
         },
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("stock_error", (err as { message?: string }).message ?? "Failed to move stock", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "stock_error", "Failed to move stock");
 
       const result = await res.json();
-      output(result, { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+      output(result, { format: options.format });
+    });
   });
 
 const stockListCommand = new Command()
@@ -165,40 +107,21 @@ const stockListCommand = new Command()
   .option("--format <fmt:string>", "Output format: json, csv, table")
   .option("--db <path:string>", "Database path")
   .action(async (options, partIdOrName) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
-      const partRes = await client.api.parts[":id"].$get({
-        param: { id: partIdOrName },
-      });
-      if (!partRes.ok) {
-        outputError("not_found", `Part '${partIdOrName}' not found`, format);
-        Deno.exit(1);
-      }
-      const part = await partRes.json();
+    await withClient(options.db, async (client) => {
+      const part = await resolvePart(client, partIdOrName);
 
       const res = await client.api.stock[":part_id"].$get({
         param: { part_id: String(part.id) },
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed to list stock", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "error", "Failed to list stock");
 
       const lots = await res.json();
       output(lots, {
-        format,
+        format: options.format,
         columns: ["id", "quantity", "status", "location_path", "expiry_date", "notes"],
       });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 const lowCommand = new Command()
@@ -207,35 +130,29 @@ const lowCommand = new Command()
   .option("--format <fmt:string>", "Output format: json, csv, table")
   .option("--db <path:string>", "Database path")
   .action(async (options) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api.parts.$get({
         query: { low: "true" },
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed to list low stock", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "error", "Failed to list low stock");
 
       const parts = await res.json();
       output(parts, {
-        format,
+        format: options.format,
         columns: ["id", "name", "stock", "min_stock", "category_path", "manufacturer"],
       });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 export const stockCommand = new Command()
   .name("stock")
   .description("Stock management")
+  .example("Add stock", "tray stock add NE555 --qty 10 --location 'Shelf 1'")
+  .example("Adjust stock", "tray stock adjust NE555 --qty -5 --reason 'used in project'")
+  .example("Move stock", "tray stock move NE555 --qty 5 --from 'Shelf 1' --to 'Shelf 2'")
+  .example("List lots", "tray stock list NE555")
+  .example("Low stock report", "tray stock low")
   .command("add", stockAddCommand)
   .command("adjust", stockAdjustCommand)
   .command("move", stockMoveCommand)

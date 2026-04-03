@@ -11,8 +11,8 @@
  */
 
 import { Command } from "@cliffy/command";
-import { getClient, cleanup } from "../client.ts";
-import { output, outputError, detectFormat } from "../output/format.ts";
+import { withClient, resolvePart } from "../client.ts";
+import { output, assertOk, CliError } from "../output/format.ts";
 
 // ---------------------------------------------------------------------------
 // create
@@ -26,31 +26,20 @@ const poCreateCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api["purchase-orders"].$post({
         json: { supplier: options.supplier, notes: options.notes },
       });
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed to create PO", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "error", "Failed to create PO");
       const po = await res.json();
-      if (format !== "json") {
+      if (options.format !== "json") {
         // deno-lint-ignore no-explicit-any
         const p = po as any;
         console.log(`PO #${p.id} (draft) created for supplier ${options.supplier}`);
       } else {
-        output(po, { format });
+        output(po, { format: options.format });
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 // ---------------------------------------------------------------------------
@@ -65,26 +54,16 @@ const poListCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const query: Record<string, string> = {};
       if (options.status) query.status = options.status;
       const res = await client.api["purchase-orders"].$get({ query });
-      if (!res.ok) {
-        outputError("error", "Failed to list purchase orders", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "error", "Failed to list purchase orders");
       output(await res.json(), {
-        format,
+        format: options.format,
         columns: ["id", "status", "supplier_name", "total_cost", "created_at"],
       });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 // ---------------------------------------------------------------------------
@@ -98,19 +77,14 @@ const poShowCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, id) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api["purchase-orders"][":id"].$get({
         param: { id: String(id) },
       });
-      if (!res.ok) {
-        outputError("not_found", `Purchase order ${id} not found`, format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "not_found", `Purchase order ${id} not found`);
       const po = await res.json();
-      if (format === "json") {
-        output(po, { format });
+      if (options.format === "json") {
+        output(po, { format: options.format });
       } else {
         // deno-lint-ignore no-explicit-any
         const p = po as any;
@@ -133,12 +107,7 @@ const poShowCommand = new Command()
           console.log("  (no lines)");
         }
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 // ---------------------------------------------------------------------------
@@ -155,19 +124,9 @@ const poAddCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, poId, partIdOrName) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
+    await withClient(options.db, async (client) => {
       // Resolve part name to ID
-      const partRes = await client.api.parts[":id"].$get({
-        param: { id: partIdOrName },
-      });
-      if (!partRes.ok) {
-        outputError("not_found", `Part '${partIdOrName}' not found`, format);
-        Deno.exit(1);
-      }
-      const part = await partRes.json();
+      const part = await resolvePart(client, partIdOrName);
 
       // Add line via part_id (server resolves supplier_part + auto-fills price)
       const res = await client.api["purchase-orders"][":id"].lines.$post({
@@ -180,16 +139,12 @@ const poAddCommand = new Command()
         },
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed to add line", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "error", "Failed to add line");
 
       const line = await res.json();
 
-      if (format === "json") {
-        output(line, { format });
+      if (options.format === "json") {
+        output(line, { format: options.format });
       } else {
         // deno-lint-ignore no-explicit-any
         const l = line as any;
@@ -202,12 +157,7 @@ const poAddCommand = new Command()
         const skuStr = l.supplier_part_sku ? ` (SKU: ${l.supplier_part_sku})` : "";
         console.log(`Added: ${l.part_name} x${l.quantity_ordered}${priceStr}${skuStr}`);
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 // ---------------------------------------------------------------------------
@@ -221,30 +171,19 @@ const poSubmitCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, poId) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api["purchase-orders"][":id"].$patch({
         param: { id: String(poId) },
         json: { status: "ordered" },
       });
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed to submit PO", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "error", "Failed to submit PO");
       const po = await res.json();
-      if (format === "json") {
-        output(po, { format });
+      if (options.format === "json") {
+        output(po, { format: options.format });
       } else {
         console.log(`PO #${poId}: draft -> ordered`);
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 // ---------------------------------------------------------------------------
@@ -258,30 +197,19 @@ const poCancelCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, poId) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api["purchase-orders"][":id"].$patch({
         param: { id: String(poId) },
         json: { status: "cancelled" },
       });
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed to cancel PO", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "error", "Failed to cancel PO");
       const po = await res.json();
-      if (format === "json") {
-        output(po, { format });
+      if (options.format === "json") {
+        output(po, { format: options.format });
       } else {
         console.log(`PO #${poId}: cancelled`);
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 // ---------------------------------------------------------------------------
@@ -298,30 +226,22 @@ const poReceiveCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, poId) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
+    await withClient(options.db, async (client) => {
       if (options.line) {
         // Single line receive
         const qty = options.qty;
         if (!qty) {
-          outputError("validation", "--qty is required when using --line", format);
-          Deno.exit(1);
+          throw new CliError("validation", "--qty is required when using --line");
         }
 
         const res = await client.api["po-lines"][":id"].receive.$post({
           param: { id: String(options.line) },
           json: { quantity_received: qty, location: options.location },
         });
-        if (!res.ok) {
-          const err = await res.json();
-          outputError("receive_error", (err as { message?: string }).message ?? "Failed to receive", format);
-          Deno.exit(1);
-        }
+        await assertOk(res, "receive_error", "Failed to receive");
         const line = await res.json();
-        if (format === "json") {
-          output(line, { format });
+        if (options.format === "json") {
+          output(line, { format: options.format });
         } else {
           // deno-lint-ignore no-explicit-any
           const l = line as any;
@@ -333,10 +253,7 @@ const poReceiveCommand = new Command()
         const poRes = await client.api["purchase-orders"][":id"].$get({
           param: { id: String(poId) },
         });
-        if (!poRes.ok) {
-          outputError("not_found", `Purchase order ${poId} not found`, format);
-          Deno.exit(1);
-        }
+        await assertOk(poRes, "not_found", `Purchase order ${poId} not found`);
         // deno-lint-ignore no-explicit-any
         const po = (await poRes.json()) as any;
         const outstandingLines = po.lines.filter(
@@ -345,8 +262,8 @@ const poReceiveCommand = new Command()
         );
 
         if (outstandingLines.length === 0) {
-          if (format === "json") {
-            output({ message: "All lines already received", po_id: poId }, { format });
+          if (options.format === "json") {
+            output({ message: "All lines already received", po_id: poId }, { format: options.format });
           } else {
             console.log(`PO #${poId}: all lines already received`);
           }
@@ -364,16 +281,12 @@ const poReceiveCommand = new Command()
             param: { id: String(line.id) },
             json: { quantity_received: actual, location: options.location },
           });
-          if (!res.ok) {
-            const err = await res.json();
-            outputError("receive_error", (err as { message?: string }).message ?? `Failed to receive line ${line.id}`, format);
-            Deno.exit(1);
-          }
+          await assertOk(res, "receive_error", `Failed to receive line ${line.id}`);
           results.push({ line_id: line.id, part_name: line.part_name, quantity: actual });
         }
 
-        if (format === "json") {
-          output({ po_id: poId, received: results }, { format });
+        if (options.format === "json") {
+          output({ po_id: poId, received: results }, { format: options.format });
         } else {
           const locStr = options.location ? ` -> ${options.location}` : "";
           for (const r of results) {
@@ -390,12 +303,7 @@ const poReceiveCommand = new Command()
           }
         }
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 // ---------------------------------------------------------------------------
@@ -405,6 +313,11 @@ const poReceiveCommand = new Command()
 export const poCommand = new Command()
   .name("po")
   .description("Purchase order management")
+  .example("Create a PO", "tray po create --supplier Mouser --notes 'Synth restock'")
+  .example("Add a line item", "tray po add 1 NE555 --qty 100 --price 0.58")
+  .example("Submit a PO", "tray po submit 1")
+  .example("Receive all items", "tray po receive 1 --location 'Shelf A'")
+  .example("Receive partial", "tray po receive 1 --line 3 --qty 50")
   .command("create", poCreateCommand)
   .command("list", poListCommand)
   .command("show", poShowCommand)

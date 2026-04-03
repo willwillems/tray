@@ -1,6 +1,13 @@
 /**
  * Output formatting: JSON, CSV, table, with TTY auto-detection.
+ *
+ * Tables use @cliffy/table for proper word wrapping, column sizing,
+ * and Unicode-aware rendering. Colors use @cliffy/ansi/colors,
+ * restricted to functional use (errors, dim metadata).
  */
+
+import { Table } from "@cliffy/table";
+import { colors } from "@cliffy/ansi/colors";
 
 export type OutputFormat = "json" | "csv" | "table";
 
@@ -22,9 +29,9 @@ export function detectFormat(explicit?: string): OutputFormat {
 export function output(
   // deno-lint-ignore no-explicit-any
   data: any,
-  options?: { format?: OutputFormat; columns?: string[] },
+  options?: { format?: string; columns?: string[] },
 ): void {
-  const format = options?.format ?? detectFormat();
+  const format = detectFormat(options?.format);
 
   switch (format) {
     case "json":
@@ -69,46 +76,35 @@ function outputCsv(data: any, columns?: string[]): void {
 }
 
 /**
- * Output as a formatted terminal table.
+ * Output as a formatted terminal table using @cliffy/table.
  */
 // deno-lint-ignore no-explicit-any
 function outputTable(data: any, columns?: string[]): void {
   const rows = Array.isArray(data) ? data : [data];
   if (rows.length === 0) {
-    console.log("No results.");
+    console.log(colors.dim("No results."));
     return;
   }
 
   const cols = columns ?? selectDisplayColumns(rows[0]);
 
-  // Calculate column widths
-  const widths = cols.map((col) => {
-    const headerLen = col.length;
-    const maxDataLen = rows.reduce((max, row) => {
-      const val = formatValue(row[col]);
-      return Math.max(max, val.length);
-    }, 0);
-    return Math.min(Math.max(headerLen, maxDataLen), 40); // Cap at 40 chars
-  });
+  // Build header row with bold labels
+  const header = cols.map((col) => colors.bold(col));
 
-  // Header
-  const header = cols.map((col, i) => col.padEnd(widths[i])).join("  ");
-  console.log(header);
-  console.log(cols.map((_, i) => "-".repeat(widths[i])).join("  "));
+  // Build body rows
+  const body = rows.map((row) =>
+    cols.map((col) => formatValue(row[col]))
+  );
 
-  // Rows
-  for (const row of rows) {
-    const line = cols
-      .map((col, i) => {
-        const val = formatValue(row[col]);
-        return val.slice(0, widths[i]).padEnd(widths[i]);
-      })
-      .join("  ");
-    console.log(line);
-  }
+  new Table()
+    .header(header)
+    .body(body)
+    .maxColWidth(50)
+    .padding(1)
+    .render();
 
   if (rows.length > 1) {
-    console.log(`\n${rows.length} results.`);
+    console.log(colors.dim(`\n${rows.length} results.`));
   }
 }
 
@@ -147,6 +143,32 @@ function formatValue(val: unknown): string {
 }
 
 /**
+ * Structured CLI error. Thrown by commands and caught by the global error
+ * handler in mod.ts. Carries an error code for JSON output.
+ */
+export class CliError extends Error {
+  constructor(public code: string, message: string) {
+    super(message);
+    this.name = "CliError";
+  }
+}
+
+/**
+ * Assert an API response is ok. If not, throw a CliError with the
+ * server's error message (or the provided fallback).
+ */
+export async function assertOk(
+  res: Response,
+  code: string,
+  fallback: string,
+): Promise<void> {
+  if (!res.ok) {
+    const err = await res.json();
+    throw new CliError(code, (err as { message?: string }).message ?? fallback);
+  }
+}
+
+/**
  * Output an error in the appropriate format.
  */
 export function outputError(
@@ -158,6 +180,6 @@ export function outputError(
   if (fmt === "json") {
     console.error(JSON.stringify({ error, message }));
   } else {
-    console.error(`Error: ${message}`);
+    console.error(colors.red(colors.bold("Error:")) + ` ${message}`);
   }
 }

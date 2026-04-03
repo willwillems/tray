@@ -3,8 +3,8 @@
  */
 
 import { Command } from "@cliffy/command";
-import { getClient, cleanup } from "../client.ts";
-import { output, outputError, detectFormat } from "../output/format.ts";
+import { withClient } from "../client.ts";
+import { output, assertOk } from "../output/format.ts";
 
 export const addCommand = new Command()
   .name("add")
@@ -24,11 +24,11 @@ export const addCommand = new Command()
   .option("--favorite", "Mark as favorite")
   .option("--datasheet <url:string>", "Datasheet URL")
   .option("--format <fmt:string>", "Output format: json, csv, table")
-  .option("--db <path:string>", "Database path (overrides TRAY_DB)")
+  .option("--db <path:string>", "Database path")
+  .example("Add a resistor", "tray add '10k Resistor' --category 'Passives/Resistors' --stock 100")
+  .example("Add an IC with details", "tray add NE555 --category 'ICs/Timers' --manufacturer 'Texas Instruments' --mpn NE555P --footprint DIP-8 --stock 25")
   .action(async (options, name) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api.parts.$post({
         json: {
           name,
@@ -48,18 +48,7 @@ export const addCommand = new Command()
         },
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("create_failed", (err as { message?: string }).message ?? "Failed to create part", format);
-        Deno.exit(1);
-      }
-
-      const part = await res.json();
-      output(part, { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+      await assertOk(res, "create_failed", "Failed to create part");
+      output(await res.json(), { format: options.format });
+    });
   });

@@ -7,38 +7,28 @@
  */
 
 import { Command } from "@cliffy/command";
-import { getClient, cleanup, rawFetch } from "../client.ts";
-import { output, outputError, detectFormat } from "../output/format.ts";
+import { withClient, resolvePart, rawFetch } from "../client.ts";
+import { output, assertOk, CliError } from "../output/format.ts";
 
 export const attachCommand = new Command()
   .name("attach")
   .description("Attach a file to a part")
   .arguments("<part:string> <file:string>")
   .option("--type <type:string>", "Attachment type: datasheet, image, cad, other")
+  .example("Attach a datasheet", "tray attach NE555 datasheet.pdf --type datasheet")
+  .example("Attach an image", "tray attach NE555 photo.jpg --type image")
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, partIdOrName, filePath) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
-      // Resolve part
-      const partRes = await client.api.parts[":id"].$get({
-        param: { id: partIdOrName },
-      });
-      if (!partRes.ok) {
-        outputError("not_found", `Part '${partIdOrName}' not found`, format);
-        Deno.exit(1);
-      }
-      const part = await partRes.json();
+    await withClient(options.db, async (client) => {
+      const part = await resolvePart(client, partIdOrName);
 
       // Read file
       let data: Uint8Array;
       try {
         data = Deno.readFileSync(filePath);
       } catch {
-        outputError("file_error", `Cannot read file: ${filePath}`, format);
-        Deno.exit(1);
+        throw new CliError("file_error", `Cannot read file: ${filePath}`);
       }
 
       const filename = filePath.split("/").pop() ?? filePath;
@@ -58,20 +48,11 @@ export const attachCommand = new Command()
         body: formData,
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("upload_failed", (err as { message?: string }).message ?? "Upload failed", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "upload_failed", "Upload failed");
 
       const att = await res.json();
-      output(att, { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+      output(att, { format: options.format });
+    });
   });
 
 export const attachmentsCommand = new Command()
@@ -79,42 +60,26 @@ export const attachmentsCommand = new Command()
   .description("List attachments for a part")
   .arguments("<part:string>")
   .option("--format <fmt:string>", "Output format")
+  .example("List attachments", "tray attachments NE555")
   .option("--db <path:string>", "Database path")
   .action(async (options, partIdOrName) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
-      // Resolve part
-      const partRes = await client.api.parts[":id"].$get({
-        param: { id: partIdOrName },
-      });
-      if (!partRes.ok) {
-        outputError("not_found", `Part '${partIdOrName}' not found`, format);
-        Deno.exit(1);
-      }
-      const part = await partRes.json();
+    await withClient(options.db, async (client) => {
+      const part = await resolvePart(client, partIdOrName);
 
       const res = await rawFetch(
         `/api/attachments?entity_type=part&entity_id=${part.id}`,
       );
 
       if (!res.ok) {
-        outputError("error", "Failed to list attachments", format);
-        Deno.exit(1);
+        throw new CliError("error", "Failed to list attachments");
       }
 
       const atts = await res.json();
       output(atts, {
-        format,
+        format: options.format,
         columns: ["id", "filename", "type", "mime_type", "size_bytes", "created_at"],
       });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 export const detachCommand = new Command()
@@ -122,26 +87,16 @@ export const detachCommand = new Command()
   .description("Remove an attachment")
   .arguments("<id:integer>")
   .option("--format <fmt:string>", "Output format")
+  .example("Remove attachment", "tray detach 5")
   .option("--db <path:string>", "Database path")
   .action(async (options, id) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (_client) => {
       const res = await rawFetch(`/api/attachments/${id}`, { method: "DELETE" });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed to detach", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "error", "Failed to detach");
 
-      output(await res.json(), { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+      output(await res.json(), { format: options.format });
+    });
   });
 
 function guessMimeType(filename: string): string {

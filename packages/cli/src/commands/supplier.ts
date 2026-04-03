@@ -9,8 +9,8 @@
  */
 
 import { Command } from "@cliffy/command";
-import { getClient, cleanup } from "../client.ts";
-import { output, outputError, detectFormat } from "../output/format.ts";
+import { withClient, resolvePart } from "../client.ts";
+import { output, assertOk, CliError } from "../output/format.ts";
 
 const supplierAddCommand = new Command()
   .name("add")
@@ -21,24 +21,13 @@ const supplierAddCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, name) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api.suppliers.$post({
         json: { name, url: options.url, notes: options.notes },
       });
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed", format);
-        Deno.exit(1);
-      }
-      output(await res.json(), { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+      await assertOk(res, "error", "Failed");
+      output(await res.json(), { format: options.format });
+    });
   });
 
 const supplierListCommand = new Command()
@@ -48,24 +37,14 @@ const supplierListCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api.suppliers.$get();
-      if (!res.ok) {
-        outputError("error", "Failed to list suppliers", format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "error", "Failed to list suppliers");
       output(await res.json(), {
-        format,
+        format: options.format,
         columns: ["id", "name", "url", "part_count"],
       });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 const supplierShowCommand = new Command()
@@ -75,16 +54,11 @@ const supplierShowCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, id) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
+    await withClient(options.db, async (client) => {
       const res = await client.api.suppliers[":id"].$get({
         param: { id: String(id) },
       });
-      if (!res.ok) {
-        outputError("not_found", `Supplier ${id} not found`, format);
-        Deno.exit(1);
-      }
+      await assertOk(res, "not_found", `Supplier ${id} not found`);
       const supplier = await res.json();
 
       // Also fetch linked parts
@@ -93,24 +67,19 @@ const supplierShowCommand = new Command()
       });
       const parts = partsRes.ok ? await partsRes.json() : [];
 
-      if (format === "json") {
-        output({ ...supplier, supplier_parts: parts }, { format });
+      if (options.format === "json") {
+        output({ ...supplier, supplier_parts: parts }, { format: options.format });
       } else {
-        output(supplier, { format });
+        output(supplier, { format: options.format });
         if ((parts as unknown[]).length > 0) {
           console.log("\nLinked parts:");
           output(parts, {
-            format,
+            format: options.format,
             columns: ["id", "part_name", "sku", "price_breaks"],
           });
         }
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 const supplierLinkCommand = new Command()
@@ -124,19 +93,8 @@ const supplierLinkCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, partIdOrName, supplierId) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
-      // Resolve part name to ID
-      const partRes = await client.api.parts[":id"].$get({
-        param: { id: partIdOrName },
-      });
-      if (!partRes.ok) {
-        outputError("not_found", `Part '${partIdOrName}' not found`, format);
-        Deno.exit(1);
-      }
-      const part = await partRes.json();
+    await withClient(options.db, async (client) => {
+      const part = await resolvePart(client, partIdOrName);
 
       // Build price breaks if price provided
       const priceBreaks = options.price
@@ -153,18 +111,9 @@ const supplierLinkCommand = new Command()
         },
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        outputError("error", (err as { message?: string }).message ?? "Failed to link", format);
-        Deno.exit(1);
-      }
-      output(await res.json(), { format });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+      await assertOk(res, "error", "Failed to link");
+      output(await res.json(), { format: options.format });
+    });
   });
 
 const buyCommand = new Command()
@@ -175,19 +124,8 @@ const buyCommand = new Command()
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
   .action(async (options, partIdOrName) => {
-    const format = detectFormat(options.format);
-    try {
-      const client = await getClient({ dbPath: options.db });
-
-      // Resolve part name
-      const partRes = await client.api.parts[":id"].$get({
-        param: { id: partIdOrName },
-      });
-      if (!partRes.ok) {
-        outputError("not_found", `Part '${partIdOrName}' not found`, format);
-        Deno.exit(1);
-      }
-      const part = await partRes.json();
+    await withClient(options.db, async (client) => {
+      const part = await resolvePart(client, partIdOrName);
 
       const res = await client.api.parts[":id"]["best-price"].$get({
         param: { id: String(part.id) },
@@ -195,9 +133,9 @@ const buyCommand = new Command()
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        if (format === "json") {
-          output(err, { format });
+        if (options.format === "json") {
+          const err = await res.json();
+          output(err, { format: options.format });
         } else {
           console.log(`No pricing found for '${partIdOrName}' at qty ${options.qty}`);
           console.log("Tip: use 'tray supplier link' to add supplier pricing.");
@@ -206,8 +144,8 @@ const buyCommand = new Command()
       }
 
       const result = await res.json();
-      if (format === "json") {
-        output(result, { format });
+      if (options.format === "json") {
+        output(result, { format: options.format });
       } else {
         // deno-lint-ignore no-explicit-any
         const r = result as any;
@@ -220,17 +158,16 @@ const buyCommand = new Command()
           console.log(`  URL:        ${r.supplier_part.url}`);
         }
       }
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e), format);
-      Deno.exit(1);
-    } finally {
-      await cleanup();
-    }
+    });
   });
 
 export const supplierCommand = new Command()
   .name("supplier")
   .description("Supplier management")
+  .example("Add a supplier", "tray supplier add 'DigiKey' --url 'https://digikey.com'")
+  .example("List suppliers", "tray supplier list")
+  .example("Link part to supplier", "tray supplier link NE555 1 --sku '296-1411-5-ND' --price 0.58")
+  .example("Find best price", "tray supplier buy NE555 --qty 100")
   .command("add", supplierAddCommand)
   .command("list", supplierListCommand)
   .command("show", supplierShowCommand)

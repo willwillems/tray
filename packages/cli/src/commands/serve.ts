@@ -6,7 +6,7 @@
 import { Command } from "@cliffy/command";
 import { createApp } from "@tray/api";
 import { setupDb } from "@tray/core";
-import { outputError } from "../output/format.ts";
+import { getDbPath } from "../client.ts";
 
 export const serveCommand = new Command()
   .name("serve")
@@ -14,30 +14,27 @@ export const serveCommand = new Command()
   .option("--port <port:integer>", "Port to listen on", { default: 8080 })
   .option("--host <host:string>", "Host to bind to", { default: "127.0.0.1" })
   .option("--db <path:string>", "Database path")
+  .example("Start server", "tray serve")
+  .example("Custom port", "tray serve --port 3000 --host 0.0.0.0")
   .action(async (options) => {
-    try {
-      const dbPath = options.db ?? getDbPath();
-      const db = await setupDb(dbPath);
-      const app = createApp(db);
+    const dbPath = options.db ?? getDbPath();
+    const db = await setupDb(dbPath);
+    const app = createApp(db);
 
-      console.log(`Tray server starting on http://${options.host}:${options.port}`);
-      console.log(`Database: ${dbPath}`);
-      console.log(`\nEndpoints:`);
-      console.log(`  API:   http://${options.host}:${options.port}/api/`);
-      console.log(`  KiCad: http://${options.host}:${options.port}/kicad/v1/`);
-      console.log(`\nKiCad HTTP Library config:`);
-      console.log(`  tray kicad config --url http://${options.host}:${options.port}`);
-      console.log(`\nPress Ctrl+C to stop.\n`);
+    console.log(`Tray server starting on http://${options.host}:${options.port}`);
+    console.log(`Database: ${dbPath}`);
+    console.log(`\nEndpoints:`);
+    console.log(`  API:   http://${options.host}:${options.port}/api/`);
+    console.log(`  KiCad: http://${options.host}:${options.port}/kicad/v1/`);
+    console.log(`\nKiCad HTTP Library config:`);
+    console.log(`  tray kicad config --url http://${options.host}:${options.port}`);
+    console.log(`\nPress Ctrl+C to stop.\n`);
 
-      Deno.serve({
-        port: options.port,
-        hostname: options.host,
-        handler: app.fetch,
-      });
-    } catch (e) {
-      outputError("error", e instanceof Error ? e.message : String(e));
-      Deno.exit(1);
-    }
+    Deno.serve({
+      port: options.port,
+      hostname: options.host,
+      handler: app.fetch,
+    });
   });
 
 const kicadConfigCommand = new Command()
@@ -68,11 +65,5 @@ const kicadConfigCommand = new Command()
 export const kicadCommand = new Command()
   .name("kicad")
   .description("KiCad integration")
+  .example("Generate KiCad config", "tray kicad config > ~/my-inventory.kicad_httplib")
   .command("config", kicadConfigCommand);
-
-function getDbPath(): string {
-  const envPath = Deno.env.get("TRAY_DB");
-  if (envPath) return envPath;
-  const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ?? ".";
-  return `${home}/.tray/data.db`;
-}
