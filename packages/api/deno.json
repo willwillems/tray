@@ -1,6 +1,6 @@
 {
   "name": "@tray/api",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "exports": "./src/mod.ts",
   "imports": {
     "@tray/core": "../core/src/mod.ts",
