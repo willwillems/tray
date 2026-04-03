@@ -1,47 +1,44 @@
 /**
  * `tray attach` -- Attachment management.
  *
- *   tray attach <part> <file> [--type datasheet|image|cad]
+ *   tray attach <part> <file-or-url> [--type datasheet|image|cad]
  *   tray attachments <part>
  *   tray detach <attachment_id>
+ *
+ * The <file-or-url> argument accepts either a local file path or an HTTP(S)
+ * URL. When given a URL, the CLI fetches it and uploads the bytes to the
+ * server via the same multipart endpoint.
  */
 
 import { Command } from "@cliffy/command";
 import { withClient, resolvePart, rawFetch } from "../client.ts";
 import { output, assertOk, CliError } from "../output/format.ts";
+import { resolveFileInput, warnIfUnsupportedImageFormat } from "../file-input.ts";
 
 export const attachCommand = new Command()
   .name("attach")
-  .description("Attach a file to a part")
-  .arguments("<part:string> <file:string>")
+  .description("Attach a file (local path or URL) to a part")
+  .arguments("<part:string> <file-or-url:string>")
   .option("--type <type:string>", "Attachment type: datasheet, image, cad, other")
   .example("Attach a datasheet", "tray attach NE555 datasheet.pdf --type datasheet")
   .example("Attach an image", "tray attach NE555 photo.jpg --type image")
+  .example("Attach from URL", 'tray attach NE555 "https://example.com/photo.jpg"')
   .option("--format <fmt:string>", "Output format")
   .option("--db <path:string>", "Database path")
-  .action(async (options, partIdOrName, filePath) => {
+  .action(async (options, partIdOrName, fileOrUrl) => {
     await withClient(options.db, async (client) => {
       const part = await resolvePart(client, partIdOrName);
 
-      // Read file
-      let data: Uint8Array;
-      try {
-        data = Deno.readFileSync(filePath);
-      } catch {
-        throw new CliError("file_error", `Cannot read file: ${filePath}`);
-      }
-
-      const filename = filePath.split("/").pop() ?? filePath;
-
-      // Guess mime type from extension
-      const mimeType = guessMimeType(filename);
+      const file = await resolveFileInput(fileOrUrl);
+      warnIfUnsupportedImageFormat(file.mimeType, file.filename);
 
       // Upload via multipart form (raw fetch -- Hono RPC doesn't handle multipart)
       const formData = new FormData();
-      formData.append("file", new Blob([data], { type: mimeType }), filename);
+      formData.append("file", new Blob([file.data], { type: file.mimeType }), file.filename);
       formData.append("entity_type", "part");
       formData.append("entity_id", String(part.id));
       if (options.type) formData.append("type", options.type);
+      if (file.sourceUrl) formData.append("source_url", file.sourceUrl);
 
       const res = await rawFetch("/api/attachments", {
         method: "POST",
@@ -98,24 +95,3 @@ export const detachCommand = new Command()
       output(await res.json(), { format: options.format });
     });
   });
-
-function guessMimeType(filename: string): string {
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  const map: Record<string, string> = {
-    png: "image/png",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    gif: "image/gif",
-    webp: "image/webp",
-    bmp: "image/bmp",
-    pdf: "application/pdf",
-    txt: "text/plain",
-    csv: "text/csv",
-    json: "application/json",
-    kicad_sch: "application/x-kicad-schematic",
-    kicad_pcb: "application/x-kicad-pcb",
-    step: "model/step",
-    stp: "model/step",
-  };
-  return map[ext] ?? "application/octet-stream";
-}

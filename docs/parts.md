@@ -26,6 +26,17 @@ tray add "NE555" \
 
 Stock and location are optional at creation time. If you provide `--stock`, a stock lot is created automatically. If you also provide `--location`, the lot is placed there.
 
+You can attach an image at creation time with `--image` (accepts a local file path or URL):
+
+```bash
+tray add "ALPHA RV112FF" \
+  --category "Potentiometers" \
+  --manufacturer "ALPHA" \
+  --image "https://example.com/product.jpg"
+```
+
+The image is stored as an attachment and automatically generates a 128x128 JPEG thumbnail for the part.
+
 ## Listing and Filtering
 
 ```bash
@@ -97,6 +108,28 @@ tray rm 1
 ```
 
 Deleting a part cascades: stock lots, tags, parameters, supplier links, BOM references, and attachments are all removed.
+
+## Attachments and Images
+
+Attach files to parts -- datasheets, images, CAD files. The `<file-or-url>` argument accepts both local file paths and HTTP(S) URLs.
+
+```bash
+# Attach a local file
+tray attach NE555 ~/datasheets/ne555.pdf --type datasheet
+
+# Attach from a URL (Tray fetches and stores the file)
+tray attach NE555 "https://cdn.example.com/ne555-photo.jpg"
+
+# List attachments
+tray attachments NE555
+
+# Remove an attachment
+tray detach 5
+```
+
+When an image attachment is stored on a part, Tray automatically generates a 128x128 JPEG thumbnail (stored as base64 on the part record). Supported image formats for thumbnails: **PNG, JPEG, GIF, WebP, BMP**. Other image formats (AVIF, TIFF, SVG, HEIC) will be attached successfully but won't produce a thumbnail -- a warning is shown.
+
+When a URL is used, the `source_url` is recorded in the attachment metadata for traceability.
 
 ## Categories
 

@@ -20,6 +20,9 @@ The database is at `~/.tray/data.db` by default. Override with `TRAY_DB` env var
 # Add a part
 tray add "NE555" --category "ICs/Timers" --stock 25 --manufacturer "TI" --mpn "NE555P" --tags "timer,dip"
 
+# Add a part with an image (URL or local path -- sets thumbnail automatically)
+tray add "LM7805" --category "ICs/Regulators" --stock 10 --image "https://example.com/lm7805.jpg"
+
 # List all parts
 tray list
 
@@ -147,11 +150,37 @@ Status flow: `draft` -> `ordered` -> `partial` -> `received` (or `cancelled`). R
 
 ## Attachments
 
+Attach files (local or URL) to parts. Images automatically generate a 128x128 JPEG thumbnail.
+
 ```bash
+# Attach a local file
 tray attach NE555 ~/datasheets/ne555.pdf
+
+# Attach from a URL (fetches and stores the file)
+tray attach NE555 "https://example.com/ne555-photo.jpg"
+
+# Specify attachment type
+tray attach NE555 photo.jpg --type image
+
+# List attachments for a part
 tray attachments NE555
+
+# Remove an attachment
 tray detach 1
 ```
+
+Supported image formats for thumbnail generation: **PNG, JPEG, GIF, WebP, BMP**. Other image formats (AVIF, TIFF, SVG, HEIC) will be attached but won't generate a thumbnail -- a warning is shown.
+
+You can also attach an image at part creation time with `--image`:
+
+```bash
+tray add "ALPHA RV112FF" \
+  --category "Potentiometers" \
+  --manufacturer "ALPHA" \
+  --image "https://example.com/product.jpg"
+```
+
+This creates the part and immediately attaches the image, setting it as the part thumbnail.
 
 ## Import and Export
 
