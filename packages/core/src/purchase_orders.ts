@@ -342,6 +342,72 @@ export async function addPoLine(
 }
 
 /**
+ * Update a PO line's mutable fields (quantity_ordered, unit_price, currency).
+ * Only allowed on POs in draft or ordered status.
+ */
+export async function updatePoLine(
+  db: Kysely<Database>,
+  id: number,
+  input: { quantity_ordered?: number; unit_price?: number | null; currency?: string | null },
+): Promise<PoLine> {
+  const line = await db.selectFrom("po_lines").selectAll().where("id", "=", id).executeTakeFirst();
+  if (!line) throw new Error(`PO line ${id} not found`);
+
+  // Verify PO is in an editable state
+  const po = await db.selectFrom("purchase_orders").select("status")
+    .where("id", "=", line.purchase_order_id).executeTakeFirstOrThrow();
+  if (po.status === "received" || po.status === "cancelled") {
+    throw new Error(`Cannot edit lines on a ${po.status} purchase order`);
+  }
+
+  // Don't allow reducing quantity below already-received amount
+  if (input.quantity_ordered !== undefined && input.quantity_ordered < line.quantity_received) {
+    throw new Error(
+      `Cannot set quantity to ${input.quantity_ordered}: already received ${line.quantity_received}`,
+    );
+  }
+
+  const updates: Record<string, unknown> = {};
+  const oldValues: Record<string, unknown> = {};
+  const newValues: Record<string, unknown> = {};
+
+  if (input.quantity_ordered !== undefined) {
+    oldValues.quantity_ordered = line.quantity_ordered;
+    newValues.quantity_ordered = input.quantity_ordered;
+    updates.quantity_ordered = input.quantity_ordered;
+  }
+  if (input.unit_price !== undefined) {
+    oldValues.unit_price = line.unit_price;
+    newValues.unit_price = input.unit_price;
+    updates.unit_price = input.unit_price;
+  }
+  if (input.currency !== undefined) {
+    oldValues.currency = line.currency;
+    newValues.currency = input.currency;
+    updates.currency = input.currency;
+  }
+
+  if (Object.keys(updates).length === 0) return line;
+
+  const updated = await db
+    .updateTable("po_lines")
+    .set(updates)
+    .where("id", "=", id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  await recordAudit(db, {
+    entity_type: "po_line",
+    entity_id: id,
+    action: "update",
+    old_values: oldValues,
+    new_values: newValues,
+  });
+
+  return updated;
+}
+
+/**
  * Receive items on a PO line. Creates stock lots for the received quantity.
  */
 export async function receivePOLine(

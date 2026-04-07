@@ -5,6 +5,7 @@
  *   tray po list [--status draft|ordered|partial|received|cancelled]
  *   tray po show <id>
  *   tray po add <po_id> <part> --qty 100 [--price 0.58] [--currency USD]
+ *   tray po edit-line <line_id> [--qty N] [--price N] [--currency CODE]
  *   tray po submit <po_id>
  *   tray po cancel <po_id>
  *   tray po receive <po_id> [--line <line_id> --qty N] [--location "Shelf A"]
@@ -156,6 +157,54 @@ const poAddCommand = new Command()
           : " (no price)";
         const skuStr = l.supplier_part_sku ? ` (SKU: ${l.supplier_part_sku})` : "";
         console.log(`Added: ${l.part_name} x${l.quantity_ordered}${priceStr}${skuStr}`);
+      }
+    });
+  });
+
+// ---------------------------------------------------------------------------
+// edit-line
+// ---------------------------------------------------------------------------
+
+const poEditLineCommand = new Command()
+  .name("edit-line")
+  .description("Edit a PO line's quantity, price, or currency")
+  .arguments("<line_id:integer>")
+  .option("--qty <quantity:integer>", "New quantity ordered")
+  .option("--price <price:number>", "New unit price")
+  .option("--currency <currency:string>", "New currency code")
+  .option("--format <fmt:string>", "Output format")
+  .option("--db <path:string>", "Database path")
+  .example("Update quantity", "tray po edit-line 5 --qty 100")
+  .example("Update price", "tray po edit-line 5 --price 0.0412")
+  .example("Update both atomically", "tray po edit-line 5 --qty 100 --price 0.0412")
+  .action(async (options, lineId) => {
+    if (!options.qty && options.price === undefined && !options.currency) {
+      throw new CliError("validation", "Provide at least one of --qty, --price, or --currency");
+    }
+
+    await withClient(options.db, async (client) => {
+      const json: Record<string, unknown> = {};
+      if (options.qty !== undefined) json.quantity_ordered = options.qty;
+      if (options.price !== undefined) json.unit_price = options.price;
+      if (options.currency !== undefined) json.currency = options.currency;
+
+      const res = await client.api["po-lines"][":id"].$patch({
+        param: { id: String(lineId) },
+        json,
+      });
+      await assertOk(res, "update_error", `Failed to update PO line ${lineId}`);
+
+      const line = await res.json();
+      if (options.format === "json") {
+        output(line, { format: options.format });
+      } else {
+        // deno-lint-ignore no-explicit-any
+        const l = line as any;
+        const parts: string[] = [];
+        if (options.qty !== undefined) parts.push(`qty=${l.quantity_ordered}`);
+        if (options.price !== undefined) parts.push(`price=${Number(l.unit_price).toFixed(4)}`);
+        if (options.currency !== undefined) parts.push(`currency=${l.currency}`);
+        console.log(`PO line #${l.id} updated: ${parts.join(", ")}`);
       }
     });
   });
@@ -322,6 +371,7 @@ export const poCommand = new Command()
   .command("list", poListCommand)
   .command("show", poShowCommand)
   .command("add", poAddCommand)
+  .command("edit-line", poEditLineCommand)
   .command("submit", poSubmitCommand)
   .command("cancel", poCancelCommand)
   .command("receive", poReceiveCommand);

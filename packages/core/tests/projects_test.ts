@@ -29,6 +29,7 @@ import {
   createPurchaseOrder,
   getPurchaseOrder,
   receivePOLine,
+  updatePoLine,
 } from "../src/purchase_orders.ts";
 
 async function freshDb() {
@@ -388,6 +389,135 @@ Deno.test("receivePOLine - rejects over-receive", async () => {
     Error,
     "exceed ordered qty",
   );
+
+  await db.destroy();
+});
+
+// --- updatePoLine ---
+
+Deno.test("updatePoLine - updates quantity and price atomically", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "DigiKey" });
+  const part = await createPart(db, { name: "NE555" });
+  const sp = await createSupplierPart(db, { part_id: part.id, supplier_id: supplier.id });
+
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+  const line = await addPoLine(db, {
+    purchase_order_id: po.id,
+    supplier_part_id: sp.id,
+    quantity_ordered: 1,
+    unit_price: 4.12,
+    currency: "EUR",
+  });
+
+  // Simulate the pack-size correction: qty 1 listing -> 100 pieces, price /= 100
+  const updated = await updatePoLine(db, line.id, {
+    quantity_ordered: 100,
+    unit_price: 0.0412,
+  });
+
+  assertEquals(updated.quantity_ordered, 100);
+  assertEquals(updated.unit_price, 0.0412);
+  assertEquals(updated.currency, "EUR"); // unchanged
+
+  await db.destroy();
+});
+
+Deno.test("updatePoLine - updates single field only", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "Mouser" });
+  const part = await createPart(db, { name: "LM7805" });
+  const sp = await createSupplierPart(db, { part_id: part.id, supplier_id: supplier.id });
+
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+  const line = await addPoLine(db, {
+    purchase_order_id: po.id,
+    supplier_part_id: sp.id,
+    quantity_ordered: 50,
+    unit_price: 0.45,
+    currency: "USD",
+  });
+
+  const updated = await updatePoLine(db, line.id, { quantity_ordered: 200 });
+  assertEquals(updated.quantity_ordered, 200);
+  assertEquals(updated.unit_price, 0.45); // unchanged
+  assertEquals(updated.currency, "USD"); // unchanged
+
+  await db.destroy();
+});
+
+Deno.test("updatePoLine - rejects edit on received PO", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "LCSC" });
+  const part = await createPart(db, { name: "ESP32" });
+  const sp = await createSupplierPart(db, { part_id: part.id, supplier_id: supplier.id });
+
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+  const line = await addPoLine(db, {
+    purchase_order_id: po.id,
+    supplier_part_id: sp.id,
+    quantity_ordered: 10,
+    unit_price: 3.00,
+  });
+
+  // Receive all, which marks PO as received
+  await receivePOLine(db, { po_line_id: line.id, quantity_received: 10 });
+
+  await assertRejects(
+    () => updatePoLine(db, line.id, { quantity_ordered: 20 }),
+    Error,
+    "Cannot edit lines on a received purchase order",
+  );
+
+  await db.destroy();
+});
+
+Deno.test("updatePoLine - rejects quantity below received amount", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "DigiKey" });
+  const part = await createPart(db, { name: "TL072" });
+  const sp = await createSupplierPart(db, { part_id: part.id, supplier_id: supplier.id });
+
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+  const line = await addPoLine(db, {
+    purchase_order_id: po.id,
+    supplier_part_id: sp.id,
+    quantity_ordered: 100,
+  });
+
+  // Partially receive 60
+  await receivePOLine(db, { po_line_id: line.id, quantity_received: 60 });
+
+  await assertRejects(
+    () => updatePoLine(db, line.id, { quantity_ordered: 50 }),
+    Error,
+    "already received 60",
+  );
+
+  // But increasing should work
+  const updated = await updatePoLine(db, line.id, { quantity_ordered: 200 });
+  assertEquals(updated.quantity_ordered, 200);
+
+  await db.destroy();
+});
+
+Deno.test("updatePoLine - no-op returns existing line", async () => {
+  const db = await freshDb();
+  const supplier = await createSupplier(db, { name: "DigiKey" });
+  const part = await createPart(db, { name: "Resistor" });
+  const sp = await createSupplierPart(db, { part_id: part.id, supplier_id: supplier.id });
+
+  const po = await createPurchaseOrder(db, { supplier_id: supplier.id });
+  const line = await addPoLine(db, {
+    purchase_order_id: po.id,
+    supplier_part_id: sp.id,
+    quantity_ordered: 10,
+    unit_price: 0.01,
+  });
+
+  const same = await updatePoLine(db, line.id, {});
+  assertEquals(same.id, line.id);
+  assertEquals(same.quantity_ordered, 10);
 
   await db.destroy();
 });

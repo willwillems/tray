@@ -74,6 +74,7 @@ import {
   addPoLine,
   receivePOLine,
   resolveSupplier,
+  updatePoLine,
   updatePurchaseOrder,
   getKicadRoot,
   getKicadCategories,
@@ -832,6 +833,25 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
           return c.json(line, 201);
         } catch (e) {
           return c.json({ error: "not_found", message: (e as Error).message }, 400);
+        }
+      },
+    )
+    .patch(
+      "/api/po-lines/:id",
+      zValidator("json", z.object({
+        quantity_ordered: z.number().int().positive().optional(),
+        unit_price: z.number().nullable().optional(),
+        currency: z.string().nullable().optional(),
+      })),
+      async (c) => {
+        const id = parseInt(c.req.param("id"), 10);
+        if (isNaN(id)) return c.json({ error: "invalid_id", message: "PO line ID must be a number" }, 400);
+        const input = c.req.valid("json");
+        try {
+          const line = await updatePoLine(c.get("db"), id, input);
+          return c.json(line);
+        } catch (e) {
+          return c.json({ error: "update_error", message: (e as Error).message }, 400);
         }
       },
     )

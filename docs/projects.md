@@ -121,6 +121,10 @@ tray po add 1 "LM7805" --qty 50 --price 0.45
 # Review the PO
 tray po show 1
 
+# Edit a PO line (update quantity, price, or both atomically)
+tray po edit-line 1 --qty 100 --price 0.0412
+tray po edit-line 2 --currency EUR
+
 # Mark as ordered (after placing the order on the supplier's website)
 tray po submit 1
 

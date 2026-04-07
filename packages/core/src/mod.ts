@@ -169,6 +169,7 @@ export {
   listPurchaseOrders,
   receivePOLine,
   resolveSupplier,
+  updatePoLine,
   updatePurchaseOrder,
   updatePurchaseOrderStatus,
 } from "./purchase_orders.ts";
