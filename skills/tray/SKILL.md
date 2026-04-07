@@ -152,6 +152,116 @@ tray po cancel 1
 
 Status flow: `draft` -> `ordered` -> `partial` -> `received` (or `cancelled`). Receiving automatically creates stock lots and transitions the PO status. When adding lines, parts are resolved to the PO's supplier automatically -- if no supplier-part link exists, one is created with a notice.
 
+## Processing a Marketplace Order
+
+When a user has ordered parts from a marketplace (AliExpress, LCSC, Mouser, etc.) and wants to enter them into Tray, follow this flow. The goal is to create parts with complete metadata, link them to the supplier, and record the purchase order.
+
+### Key rule: Tray counts pieces, not listings
+
+Marketplaces might sell in packs. Tray tracks individual pieces. Always decompose:
+
+- **Listing:** "100pcs 0805 10k Resistor" at €1.20
+- **Tray:** qty=100, unit_price=0.012 (€1.20 / 100)
+
+Never enter the listing price as the unit price. Never enter "1" as the quantity when you bought a pack of 100. If a listing says "(100pcs)" that is the quantity, and the per-piece price is listing_price / 100.
+
+### Step 1: Gather order information
+
+Before creating anything, collect the full order. Ask the user for whatever is missing. You need per line item:
+
+| Field | Required | Example |
+|-------|----------|---------|
+| Component name | Yes | TL072CDR |
+| Total pieces | Yes | 100 |
+| Total line price | Yes | €4.12 |
+| Category | Yes | ICs/Op-Amps |
+| Package/footprint | If known | SOP-8 |
+| Manufacturer | If known | Texas Instruments |
+| MPN | If known | TL072CDR |
+| Product image URL | If available | https://... |
+| Datasheet URL | If available | https://... |
+
+Also identify:
+- **Supplier name** (e.g. "AliExpress", "LCSC", "Mouser")
+- **Order notes** (order number, tracking, etc.)
+
+### Step 2: Create supplier (if new)
+
+```bash
+tray supplier add "AliExpress" --url "https://aliexpress.com"
+```
+
+Skip if the supplier already exists.
+
+### Step 3: Create parts with full metadata
+
+For each line item, create the part with every field you can fill in:
+
+```bash
+tray add "TL072CDR" \
+  --category "ICs/Op-Amps" \
+  --description "Dual JFET-input op-amp, low noise, wide bandwidth" \
+  --manufacturer "Texas Instruments" \
+  --mpn "TL072CDR" \
+  --footprint "SOP-8" \
+  --keywords "opamp op-amp dual jfet audio low-noise amplifier" \
+  --datasheet "https://www.ti.com/lit/ds/symlink/tl072.pdf" \
+  --image "https://example.com/product-image.jpg" \
+  --format json
+```
+
+**Part naming:** Use the component identifier only. No quantity ("100pcs"), no package (use `--footprint`), no supplier name, no price. The name is how you'll reference this part everywhere.
+
+**Keywords:** Think "what would I search when I can't remember this part's name?" Include: alternate names, common abbreviations, function, application domain. Space-separated.
+
+**Footprint:** Use standard package names: `0805`, `SOP-8`, `DIP-8`, `SOT-23`, `QFP-48`, `LQFP-32`, etc.
+
+**Image:** Use the `--image` flag with the product URL. This downloads, stores, and generates a thumbnail in one step. If no image URL is available, skip it unless specifically instructed -- don't block part creation.
+
+**Datasheet:** Use `--datasheet` for the URL. If the listing links to a PDF datasheet, include it. If not, skip.
+
+Capture the part ID from `--format json` output for use in step 4.
+
+### Step 4: Create PO and add lines
+
+```bash
+# Create the PO
+tray po create --supplier "AliExpress" --notes "Order #8042991, 2025-04-05"
+
+# Add lines -- always in pieces, always per-piece price
+# Listing was "100pcs TL072CDR" at €4.12 total
+# -> qty=100, price=0.0412 (4.12/100)
+tray po add 1 "TL072CDR" --qty 100 --price 0.0412 --currency EUR
+
+# Listing was "3x ESP32-S3 DevKit" at €15.90 total
+# -> qty=3, price=5.30 (15.90/3)
+tray po add 1 "ESP32-S3" --qty 3 --price 5.30 --currency EUR
+```
+
+If you made a mistake, fix it atomically:
+```bash
+tray po edit-line 1 --qty 100 --price 0.0412
+```
+
+### Step 5: Submit and verify
+
+```bash
+tray po submit 1
+tray po show 1    # Review lines, totals, and status
+```
+
+### Step 6: Receive (when items arrive)
+
+```bash
+# Receive everything at once
+tray po receive 1 --location "Incoming"
+
+# Or receive partially
+tray po receive 1 --line 1 --qty 50 --location "Lab/Shelf 2"
+```
+
+Stock is updated automatically on receive.
+
 ## Attachments
 
 Attach files (local or URL) to parts. Images automatically generate a 128x128 JPEG thumbnail.
