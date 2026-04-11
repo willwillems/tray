@@ -38,6 +38,14 @@ export type CommandHandler = (
   args: string[],
 ) => Promise<void>;
 
+/**
+ * A fetch-compatible request handler.
+ * Return a Response to handle the request, or null to pass through.
+ */
+export type MiddlewareHandler = (
+  req: Request,
+) => Response | null | Promise<Response | null>;
+
 /** The plugin interface. Plugins are functions that return this object. */
 export interface TrayPlugin {
   /** Unique plugin name */
@@ -48,6 +56,17 @@ export interface TrayPlugin {
    * Registered as `tray <name> [args...]`.
    */
   commands?: Record<string, CommandHandler>;
+
+  /**
+   * HTTP middleware that runs before the API router in `tray serve`.
+   * Return a Response to handle the request, or null to pass through to the
+   * next plugin / API router. This enables plugins to serve static files,
+   * add custom routes, or inject headers.
+   *
+   * Middleware handlers are called in plugin registration order.
+   * The first handler that returns a Response wins.
+   */
+  middleware?: MiddlewareHandler;
 
   // --- Lifecycle Hooks (fire-and-forget, errors are logged) ---
 
@@ -111,6 +130,12 @@ export class PluginEngine {
     }
   }
 
+  /** Add a single plugin without re-logging existing ones. */
+  addPlugin(plugin: TrayPlugin): void {
+    this.#plugins = [...this.#plugins, plugin];
+    this.#ctx.log(`[plugin] Loaded: ${plugin.name}`);
+  }
+
   /** Get all registered plugins */
   get plugins(): readonly TrayPlugin[] {
     return this.#plugins;
@@ -132,6 +157,22 @@ export class PluginEngine {
       }
     }
     return commands;
+  }
+
+  // --- Middleware ---
+
+  /**
+   * Get an ordered list of middleware handlers from all plugins.
+   * Returns handlers in plugin registration order.
+   */
+  getMiddleware(): MiddlewareHandler[] {
+    const handlers: MiddlewareHandler[] = [];
+    for (const plugin of this.#plugins) {
+      if (plugin.middleware) {
+        handlers.push(plugin.middleware);
+      }
+    }
+    return handlers;
   }
 
   // --- Hook Dispatchers ---

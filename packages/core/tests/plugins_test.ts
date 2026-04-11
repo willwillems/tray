@@ -345,6 +345,64 @@ Deno.test("PluginEngine - custom command receives context and args", async () =>
   await db.destroy();
 });
 
+// --- Middleware ---
+
+Deno.test("PluginEngine - getMiddleware collects handlers in order", () => {
+  const db = {} as Kysely<Database>;
+  const handler1 = (_req: Request) => null;
+  const handler2 = (_req: Request) => null;
+
+  const { engine } = createEngine(db, [
+    { name: "a", middleware: handler1 },
+    { name: "b" }, // no middleware
+    { name: "c", middleware: handler2 },
+  ]);
+
+  const middleware = engine.getMiddleware();
+  assertEquals(middleware.length, 2);
+  assertEquals(middleware[0], handler1);
+  assertEquals(middleware[1], handler2);
+});
+
+Deno.test("PluginEngine - getMiddleware returns empty when no plugins have middleware", () => {
+  const db = {} as Kysely<Database>;
+  const { engine } = createEngine(db, [
+    { name: "a" },
+    { name: "b" },
+  ]);
+
+  assertEquals(engine.getMiddleware().length, 0);
+});
+
+Deno.test("PluginEngine - middleware handler can return Response or null", async () => {
+  const db = {} as Kysely<Database>;
+  const { engine } = createEngine(db, [
+    {
+      name: "interceptor",
+      middleware: (req: Request) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/custom") {
+          return new Response("intercepted", { status: 200 });
+        }
+        return null;
+      },
+    },
+  ]);
+
+  const middleware = engine.getMiddleware();
+  assertEquals(middleware.length, 1);
+
+  // Should intercept /custom
+  const res1 = await middleware[0](new Request("http://localhost/custom"));
+  assertExists(res1);
+  assertEquals(res1!.status, 200);
+  assertEquals(await res1!.text(), "intercepted");
+
+  // Should pass through other paths
+  const res2 = await middleware[0](new Request("http://localhost/api/parts"));
+  assertEquals(res2, null);
+});
+
 // --- Plugins with no hooks (just commands, or empty) ---
 
 Deno.test("PluginEngine - plugins without hooks are fine", async () => {

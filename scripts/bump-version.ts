@@ -15,6 +15,7 @@ const DENO_JSON_PATHS = [
   "packages/core/deno.json",
   "packages/api/deno.json",
   "packages/cli/deno.json",
+  "packages/plugin-web/deno.json",
 ];
 
 const SKILL_PATH = "skills/tray/SKILL.md";
