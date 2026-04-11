@@ -1,7 +1,7 @@
 /**
  * @tray/plugin-web -- Web UI plugin for Tray.
  *
- * Serves the built Vue SPA (packages/web/dist) as middleware.
+ * Serves the built Vue SPA (packages/plugin-web/dist) as middleware.
  * This plugin handles all non-API routes: static asset serving with
  * cache headers, and SPA fallback (index.html) for client-side routing.
  *
@@ -55,19 +55,17 @@ function getMimeType(path: string): string {
  *   1. TRAY_WEB_DIR env var       (explicit override)
  *   2. Relative to this module    (works in both dev and `deno compile --include`)
  *
- * In development, this module lives at packages/plugin-web/src/mod.ts and
- * the dist is at packages/web/dist -- two directories up, then web/dist.
- *
- * When compiled with `deno compile --include packages/web/dist`, the embedded
- * filesystem preserves the same relative layout, so the same path resolves
- * into the virtual FS automatically.
+ * This module lives at packages/plugin-web/src/plugin.ts and the dist
+ * is at packages/plugin-web/dist -- one directory up. When compiled with
+ * `deno compile --include`, the embedded filesystem preserves the same
+ * relative layout.
  */
 function resolveDistDir(): string | null {
   const candidates = [
     // Explicit override via environment variable
     Deno.env.get("TRAY_WEB_DIR"),
-    // Relative to this module (dev: real FS, compiled: embedded FS)
-    import.meta.dirname ? join(import.meta.dirname, "..", "..", "web", "dist") : null,
+    // Relative to this module: src/plugin.ts -> ../dist
+    import.meta.dirname ? join(import.meta.dirname, "..", "dist") : null,
   ];
 
   for (const dir of candidates) {

@@ -5,7 +5,7 @@
   "imports": {
     "@tray/api": "../api/src/mod.ts",
     "@tray/core": "../core/src/mod.ts",
-    "@tray/plugin-web": "../plugin-web/src/mod.ts",
+    "@tray/plugin-web": "../plugin-web/src/plugin.ts",
     "kysely": "jsr:@kysely/kysely@^0.28",
     "hono": "jsr:@hono/hono@^4",
     "@cliffy/command": "jsr:@cliffy/command@^1.0.0",

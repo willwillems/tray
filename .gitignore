@@ -4,7 +4,8 @@ node_modules/
 
 # Build output
 /tray
-packages/web/dist/
+packages/plugin-web/dist/
+*.tsbuildinfo
 website/dist/
 website/.astro/
 *.db

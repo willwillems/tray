@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface-0: #09090b;
+  --color-surface-1: #18181b;
+  --color-surface-2: #27272a;
+  --color-surface-3: #3f3f46;
+  --color-border: #27272a;
+  --color-border-hover: #3f3f46;
+  --color-accent: #22d3ee;
+  --color-accent-dim: #0e7490;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+  --color-success: #22c55e;
+  --color-muted: #71717a;
+  --font-mono: "Berkeley Mono", "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+}
+
+/* Base resets */
+body {
+  font-family: var(--font-mono);
+  background: var(--color-surface-0);
+  color: #e4e4e7;
+  min-height: 100vh;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* Selection */
+::selection {
+  background: var(--color-accent-dim);
+  color: white;
+}
+
+/* Focus ring */
+*:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Transitions */
+a, button, input, select, textarea {
+  transition: all 0.15s ease;
+}
+
+/* Custom kbd styling */
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-surface-3);
+  color: var(--color-muted);
+}

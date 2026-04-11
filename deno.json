@@ -9,7 +9,7 @@
   "imports": {
     "@tray/core": "./packages/core/src/mod.ts",
     "@tray/api": "./packages/api/src/mod.ts",
-    "@tray/plugin-web": "./packages/plugin-web/src/mod.ts"
+    "@tray/plugin-web": "./packages/plugin-web/src/plugin.ts"
   },
   "tasks": {
     "dev": "deno run -A packages/cli/src/mod.ts",
@@ -19,9 +19,9 @@
     "test:core": "deno test -A packages/core/",
     "test:api": "deno test -A packages/api/",
     "test:e2e": "deno test -A packages/cli/",
-    "compile": "deno compile -A --include packages/web/dist --output ./tray packages/cli/src/mod.ts",
-    "web:build": "cd packages/web && npm run build",
-    "web:dev": "cd packages/web && npm run dev",
+    "compile": "deno compile -A --include packages/plugin-web/dist --output ./tray packages/cli/src/mod.ts",
+    "web:build": "cd packages/plugin-web && npm run build",
+    "web:dev": "cd packages/plugin-web && npm run dev",
     "version:bump": "deno run -A scripts/bump-version.ts"
   }
 }
