@@ -97,6 +97,12 @@ tray edit 1 --manufacturer "ON Semiconductor" --mpn "NE555DR"
 tray edit 1 --min-stock 10
 tray edit 1 --favorite
 tray edit 1 --no-favorite
+
+# Set thumbnail from an existing attachment
+tray edit 1 --thumbnail 5
+
+# Clear thumbnail
+tray edit 1 --thumbnail none
 ```
 
 Only the fields you specify are changed. Everything else is untouched.

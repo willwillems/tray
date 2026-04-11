@@ -345,6 +345,15 @@ export const createCategorySchema = z.object({
 
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 
+export const updateCategorySchema = z.object({
+  name: z.string().min(1).optional(),
+  parent_id: z.number().int().positive().nullable().optional(),
+  description: z.string().nullable().optional(),
+  reference_prefix: z.string().nullable().optional(),
+});
+
+export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
+
 export const listPartsSchema = z.object({
   category: z.string().optional(),
   category_id: z.coerce.number().int().positive().optional(),

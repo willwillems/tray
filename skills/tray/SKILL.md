@@ -44,6 +44,12 @@ tray show 1                          # by ID
 # Edit
 tray edit 1 --description "Timer IC" --tags "timer,smd" --min-stock 5
 
+# Set thumbnail from an existing attachment (by attachment ID)
+tray edit 1 --thumbnail 5
+
+# Clear thumbnail
+tray edit 1 --thumbnail none
+
 # Delete
 tray rm 1
 ```
@@ -283,7 +289,7 @@ tray attachments NE555
 tray detach 1
 ```
 
-Supported image formats for thumbnail generation: **PNG, JPEG, GIF, WebP, BMP**. Other image formats (AVIF, TIFF, SVG, HEIC) will be attached but won't generate a thumbnail -- a warning is shown.
+Supported image formats for thumbnail generation: **PNG, JPEG, GIF, BMP**. WebP and other formats (AVIF, TIFF, SVG, HEIC) will be attached but won't generate a thumbnail -- a warning is shown. Note: marketplace images (AliExpress, etc.) are often WebP even when the URL ends in `.jpg`. Tray detects this by inspecting file contents, not the extension, and warns accordingly. Convert to PNG/JPEG before attaching, or use `tray edit --thumbnail` to pick a different image.
 
 You can also attach an image at part creation time with `--image`:
 

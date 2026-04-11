@@ -23,12 +23,44 @@ export const editCommand = new Command()
   .option("--favorite", "Mark as favorite")
   .option("--no-favorite", "Unmark as favorite")
   .option("--datasheet <url:string>", "Datasheet URL")
+  .option("--thumbnail <ref:string>", "Set thumbnail from attachment ID, or 'none' to clear")
   .option("--format <fmt:string>", "Output format: json, csv, table")
   .option("--db <path:string>", "Database path")
   .example("Rename a part", "tray edit 1 --name 'NE555P Timer'")
   .example("Update category and tags", "tray edit 1 --category 'ICs/Timers' --tags 'timer,oscillator'")
+  .example("Set thumbnail from attachment", "tray edit 1 --thumbnail 5")
+  .example("Clear thumbnail", "tray edit 1 --thumbnail none")
   .action(async (options, id) => {
     await withClient(options.db, async (client) => {
+      let thumbnailHandled = false;
+
+      // Handle --thumbnail separately (different API endpoint)
+      if (options.thumbnail !== undefined) {
+        if (options.thumbnail === "none") {
+          const res = await client.api.parts[":id"].thumbnail.$delete({
+            param: { id: String(id) },
+          });
+          await assertOk(res, "thumbnail_error", "Failed to clear thumbnail");
+          if (options.format !== "json") {
+            console.log(`Part #${id}: thumbnail cleared`);
+          }
+        } else {
+          const attachmentId = parseInt(options.thumbnail, 10);
+          if (isNaN(attachmentId)) {
+            throw new CliError("validation", "Thumbnail must be an attachment ID (number) or 'none'");
+          }
+          const res = await client.api.parts[":id"].thumbnail.$put({
+            param: { id: String(id) },
+            json: { attachment_id: attachmentId },
+          });
+          await assertOk(res, "thumbnail_error", "Failed to set thumbnail");
+          if (options.format !== "json") {
+            console.log(`Part #${id}: thumbnail set from attachment #${attachmentId}`);
+          }
+        }
+        thumbnailHandled = true;
+      }
+
       // Build update payload -- only include provided fields
       // deno-lint-ignore no-explicit-any
       const updates: Record<string, any> = {};
@@ -47,7 +79,14 @@ export const editCommand = new Command()
       if (options.datasheet) updates.datasheet_url = options.datasheet;
 
       if (Object.keys(updates).length === 0) {
-        throw new CliError("no_changes", "No fields to update. Use --name, --description, etc.");
+        // If only --thumbnail was provided and handled, output the final part state
+        if (thumbnailHandled) {
+          const res = await client.api.parts[":id"].$get({ param: { id: String(id) } });
+          await assertOk(res, "fetch_failed", "Failed to fetch part");
+          output(await res.json(), { format: options.format });
+          return;
+        }
+        throw new CliError("no_changes", "No fields to update. Use --name, --description, --thumbnail, etc.");
       }
 
       const res = await client.api.parts[":id"].$patch({
