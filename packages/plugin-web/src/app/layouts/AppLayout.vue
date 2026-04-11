@@ -56,7 +56,7 @@ const isMac = navigator.platform.toUpperCase().includes("MAC");
     <!-- Logo -->
     <div class="flex h-12 items-center gap-2 px-4">
       <span class="text-sm font-semibold tracking-widest text-zinc-200">tray</span>
-      <span class="text-[10px] text-muted">v0.1.3</span>
+      <span class="text-[10px] text-muted">v0.1.4</span>
     </div>
 
     <div class="mx-3 border-t border-border" />
