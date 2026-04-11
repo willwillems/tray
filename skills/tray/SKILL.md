@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires the tray binary installed and available on PATH.
 metadata:
   author: willwillems
-  version: "0.1.3"
+  version: "0.1.4"
 ---
 
 # Tray CLI
