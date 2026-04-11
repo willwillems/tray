@@ -1,25 +1,25 @@
 /**
- * Attachment domain: content-addressed file storage with thumbnail generation.
+ * Attachment domain: content-addressed blob storage with thumbnail generation.
  *
- * Files are stored at: {attachments_dir}/{first-2-chars-of-hash}/{hash}.{ext}
+ * Files are stored via a BlobStore at key: {first-2-chars-of-hash}/{hash}.{ext}
  * Content-addressed: identical files are deduped by sha256 hash.
  * Thumbnails: 128x128 JPEG stored as base64 on Part.thumbnail.
+ *
+ * Platform dependencies: none. All I/O goes through the BlobStore interface.
  */
 
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, extname, join } from "node:path";
 import type { Kysely } from "kysely";
 import { recordAudit } from "./audit.ts";
 import type { Attachment, Database } from "./schema.ts";
+import type { BlobStore } from "./storage.ts";
 
-// Image formats that can generate thumbnails
+// Image formats that ImageScript can decode for thumbnail generation.
+// WebP is intentionally excluded -- ImageScript cannot decode it.
 const THUMBNAIL_MIMES = new Set([
   "image/png",
   "image/jpeg",
   "image/jpg",
   "image/gif",
-  "image/webp",
   "image/bmp",
 ]);
 
@@ -27,7 +27,7 @@ const THUMBNAIL_MIMES = new Set([
  * Store an attachment file and record metadata.
  *
  * - Computes sha256 hash for content-addressed storage
- * - Deduplicates: if same hash already stored, reuses the file
+ * - Deduplicates: if same hash already stored, reuses the blob
  * - If attached to a Part and it's an image, generates a 128x128 JPEG thumbnail
  */
 export async function storeAttachment(
@@ -40,27 +40,24 @@ export async function storeAttachment(
     mime_type: string;
     type?: string; // "datasheet", "image", "cad", "other"
     source_url?: string;
-    attachments_dir: string; // base directory for file storage
+    store: BlobStore;
   },
 ): Promise<Attachment> {
   const now = new Date().toISOString();
 
-  // Compute sha256
-  const hash = createHash("sha256").update(input.data).digest("hex");
+  // Compute sha256 via the store's platform-appropriate hash implementation
+  const hash = await input.store.hash(input.data);
 
   // Determine extension from filename
-  const ext = extname(input.filename).toLowerCase() || guessExtension(input.mime_type);
+  const ext = fileExtension(input.filename) || guessExtension(input.mime_type);
 
-  // Content-addressed storage path: {dir}/{first-2}/{hash}.{ext}
+  // Content-addressed storage key: {first-2}/{hash}.{ext}
   const prefix = hash.substring(0, 2);
   const storageKey = `${prefix}/${hash}${ext}`;
-  const dirPath = join(input.attachments_dir, prefix);
-  const filePath = join(input.attachments_dir, storageKey);
 
-  // Write file (only if not already stored -- dedup)
-  if (!existsSync(filePath)) {
-    mkdirSync(dirPath, { recursive: true });
-    writeFileSync(filePath, input.data);
+  // Write blob (only if not already stored -- dedup)
+  if (!(await input.store.has(storageKey))) {
+    await input.store.put(storageKey, input.data);
   }
 
   // Determine attachment type
@@ -84,19 +81,31 @@ export async function storeAttachment(
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  // Generate thumbnail if this is an image attached to a Part
-  if (input.entity_type === "part" && THUMBNAIL_MIMES.has(input.mime_type)) {
-    try {
-      const thumbBase64 = await generateThumbnail(input.data);
-      if (thumbBase64) {
-        await db
-          .updateTable("parts")
-          .set({ thumbnail: thumbBase64 })
-          .where("id", "=", input.entity_id)
-          .execute();
+  // Generate thumbnail if this is an image attached to a Part.
+  // Use magic bytes to detect the actual image format, not the MIME type
+  // (marketplaces like AliExpress serve WebP files with .jpg extensions).
+  if (input.entity_type === "part") {
+    const actualFormat = detectImageFormat(input.data);
+    if (actualFormat === "webp") {
+      console.error(
+        `Warning: ${input.filename} is a WebP image. ` +
+        `Thumbnail generation is not supported for WebP. ` +
+        `The file is attached, but no thumbnail was created. ` +
+        `Convert to PNG/JPEG first, or attach a different image.`,
+      );
+    } else if (actualFormat && THUMBNAIL_MIMES.has(`image/${actualFormat}`)) {
+      try {
+        const thumbBase64 = await generateThumbnail(input.data);
+        if (thumbBase64) {
+          await db
+            .updateTable("parts")
+            .set({ thumbnail: thumbBase64 })
+            .where("id", "=", input.entity_id)
+            .execute();
+        }
+      } catch {
+        // Thumbnail generation failure is non-fatal
       }
-    } catch {
-      // Thumbnail generation failure is non-fatal
     }
   }
 
@@ -130,14 +139,13 @@ export async function getAttachment(
 }
 
 /**
- * Read the attachment file content from disk.
+ * Read the attachment file content from the blob store.
  */
 export function readAttachmentFile(
-  attachmentsDir: string,
+  store: BlobStore,
   storageKey: string,
-): Uint8Array {
-  const filePath = join(attachmentsDir, storageKey);
-  return readFileSync(filePath);
+): Promise<Uint8Array> {
+  return store.get(storageKey);
 }
 
 /**
@@ -159,12 +167,12 @@ export async function listAttachments(
 
 /**
  * Delete an attachment. Removes the metadata row.
- * Only removes the file if no other attachment references the same hash.
+ * Only removes the blob if no other attachment references the same hash.
  */
 export async function deleteAttachment(
   db: Kysely<Database>,
   id: number,
-  attachmentsDir: string,
+  store: BlobStore,
 ): Promise<void> {
   const attachment = await getAttachment(db, id);
   if (!attachment) throw new Error(`Attachment ${id} not found`);
@@ -178,28 +186,40 @@ export async function deleteAttachment(
     .where("hash", "=", attachment.hash)
     .executeTakeFirst();
 
-  // Only delete the file if no other references exist
+  // Only delete the blob if no other references exist
   if (!otherRefs) {
-    const filePath = join(attachmentsDir, attachment.storage_key);
-    try {
-      unlinkSync(filePath);
-    } catch {
-      // File might already be gone
-    }
+    await store.delete(attachment.storage_key);
   }
 
-  // If this was a Part image, clear the thumbnail
-  if (attachment.entity_type === "part" && THUMBNAIL_MIMES.has(attachment.mime_type)) {
-    // Check if the part has any remaining image attachments
-    const remainingImages = await db
+  // If this was a Part image, check whether the thumbnail should be cleared.
+  // We must verify remaining attachments by reading their actual bytes (magic-byte
+  // detection), not by trusting MIME types -- matching the logic in storeAttachment.
+  // MIME types can be wrong (e.g. WebP served as image/jpeg by marketplaces).
+  if (attachment.entity_type === "part" && attachment.mime_type.startsWith("image/")) {
+    const remainingAttachments = await db
       .selectFrom("attachments")
-      .select("id")
+      .select(["id", "storage_key"])
       .where("entity_type", "=", "part")
       .where("entity_id", "=", attachment.entity_id)
-      .where("mime_type", "in", [...THUMBNAIL_MIMES])
-      .executeTakeFirst();
+      .where("mime_type", "like", "image/%")
+      .execute();
 
-    if (!remainingImages) {
+    // Check if any remaining attachment is a thumbnail-capable image (by magic bytes)
+    let hasThumbnailCapableImage = false;
+    for (const att of remainingAttachments) {
+      try {
+        const data = await store.get(att.storage_key);
+        const format = detectImageFormat(data);
+        if (format && format !== "webp" && THUMBNAIL_MIMES.has(`image/${format}`)) {
+          hasThumbnailCapableImage = true;
+          break;
+        }
+      } catch {
+        // Blob missing or unreadable -- skip
+      }
+    }
+
+    if (!hasThumbnailCapableImage) {
       await db
         .updateTable("parts")
         .set({ thumbnail: null })
@@ -261,8 +281,87 @@ export async function generateThumbnail(
 }
 
 // ---------------------------------------------------------------------------
+// Image Format Detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect file format from magic bytes. Returns the MIME type
+ * or null if not a recognized format.
+ *
+ * This is more reliable than trusting file extensions or MIME types --
+ * marketplaces commonly serve WebP files with .jpg extensions.
+ *
+ * This is the canonical magic-byte detection for the project.
+ * The CLI has a separate copy (packages/cli/src/file-input.ts) due to
+ * the package boundary rule (CLI cannot import core), but any format
+ * additions should be made here first.
+ */
+export function detectMimeFromMagicBytes(data: Uint8Array): string | null {
+  if (data.length < 12) return null;
+
+  // PNG: 89 50 4E 47 (\x89PNG)
+  if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47) {
+    return "image/png";
+  }
+
+  // JPEG: FF D8 FF
+  if (data[0] === 0xFF && data[1] === 0xD8 && data[2] === 0xFF) {
+    return "image/jpeg";
+  }
+
+  // GIF: GIF8 (GIF87a or GIF89a)
+  if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38) {
+    return "image/gif";
+  }
+
+  // WebP: RIFF....WEBP
+  if (
+    data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 &&
+    data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+
+  // BMP: BM
+  if (data[0] === 0x42 && data[1] === 0x4D) {
+    return "image/bmp";
+  }
+
+  // PDF: %PDF
+  if (data[0] === 0x25 && data[1] === 0x50 && data[2] === 0x44 && data[3] === 0x46) {
+    return "application/pdf";
+  }
+
+  return null;
+}
+
+/**
+ * Detect image format from magic bytes. Returns the format name
+ * (e.g. "png", "jpeg", "webp") or null if not a recognized image.
+ *
+ * Convenience wrapper around detectMimeFromMagicBytes for image-only checks.
+ */
+export function detectImageFormat(data: Uint8Array): string | null {
+  const mime = detectMimeFromMagicBytes(data);
+  if (!mime || !mime.startsWith("image/")) return null;
+  // "image/jpeg" -> "jpeg", "image/png" -> "png", etc.
+  return mime.substring(6);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Extract file extension from a filename (including the leading dot).
+ * Returns empty string if no extension found.
+ * Pure string operation -- no platform dependencies.
+ */
+function fileExtension(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  if (dot === -1 || dot === 0) return "";
+  return filename.substring(dot).toLowerCase();
+}
 
 function guessExtension(mimeType: string): string {
   const map: Record<string, string> = {
@@ -286,7 +385,7 @@ function guessType(mimeType: string, filename: string): string {
     if (lower.includes("datasheet") || lower.includes("spec")) return "datasheet";
     return "document";
   }
-  const ext = extname(filename).toLowerCase();
+  const ext = fileExtension(filename);
   if ([".kicad_sch", ".kicad_pcb", ".kicad_sym", ".kicad_mod", ".step", ".stp"].includes(ext)) {
     return "cad";
   }

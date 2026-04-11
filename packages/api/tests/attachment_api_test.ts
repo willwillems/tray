@@ -1,16 +1,18 @@
 /**
  * API integration tests: Attachments.
+ *
+ * Uses MemoryBlobStore -- no temp dirs, no cleanup.
  */
 
 import { assertEquals, assertExists } from "jsr:@std/assert";
-import { setupDb } from "@tray/core";
+import { setupDb, MemoryBlobStore } from "@tray/core";
 import { createApp } from "@tray/api";
 
 async function freshApp() {
   const db = await setupDb(":memory:");
-  const dir = Deno.makeTempDirSync({ prefix: "tray-api-test-" });
-  const app = createApp(db, dir);
-  return { app, db, dir };
+  const blobs = new MemoryBlobStore();
+  const app = createApp(db, { blobs });
+  return { app, db };
 }
 
 async function post(app: ReturnType<typeof createApp>, path: string, body: unknown) {
@@ -53,7 +55,7 @@ async function uploadFile(
 }
 
 Deno.test("POST /api/attachments uploads file", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   const part = await (await post(app, "/api/parts", { name: "NE555" })).json();
 
   const data = new TextEncoder().encode("test datasheet content");
@@ -68,12 +70,11 @@ Deno.test("POST /api/attachments uploads file", async () => {
   assertEquals(att.size_bytes, data.length);
   assertExists(att.hash);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("GET /api/attachments/:id returns metadata", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   const part = await (await post(app, "/api/parts", { name: "NE555" })).json();
   const data = new TextEncoder().encode("content");
   const uploaded = await (await uploadFile(app, "part", part.id, "test.txt", data, "text/plain")).json();
@@ -83,12 +84,11 @@ Deno.test("GET /api/attachments/:id returns metadata", async () => {
   const att = await res.json();
   assertEquals(att.filename, "test.txt");
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("GET /api/attachments/:id/file serves file content", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   const part = await (await post(app, "/api/parts", { name: "NE555" })).json();
   const content = "hello world datasheet";
   const data = new TextEncoder().encode(content);
@@ -101,12 +101,11 @@ Deno.test("GET /api/attachments/:id/file serves file content", async () => {
   const body = await res.text();
   assertEquals(body, content);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("GET /api/attachments lists by entity", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   const part = await (await post(app, "/api/parts", { name: "NE555" })).json();
   await uploadFile(app, "part", part.id, "a.pdf", new TextEncoder().encode("a"), "application/pdf");
   await uploadFile(app, "part", part.id, "b.pdf", new TextEncoder().encode("b"), "application/pdf");
@@ -116,12 +115,11 @@ Deno.test("GET /api/attachments lists by entity", async () => {
   const atts = await res.json();
   assertEquals(atts.length, 2);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("DELETE /api/attachments/:id removes attachment", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   const part = await (await post(app, "/api/parts", { name: "NE555" })).json();
   const uploaded = await (
     await uploadFile(app, "part", part.id, "test.txt", new TextEncoder().encode("x"), "text/plain")
@@ -133,12 +131,11 @@ Deno.test("DELETE /api/attachments/:id removes attachment", async () => {
   const getRes = await get(app, `/api/attachments/${uploaded.id}`);
   assertEquals(getRes.status, 404);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("POST /api/attachments generates thumbnail for image", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   const part = await (await post(app, "/api/parts", { name: "NE555" })).json();
 
   // Create a real PNG
@@ -157,6 +154,5 @@ Deno.test("POST /api/attachments generates thumbnail for image", async () => {
   assertEquals(typeof updated.thumbnail, "string");
   assertEquals(updated.thumbnail.length > 100, true);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });

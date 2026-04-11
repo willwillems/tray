@@ -4,17 +4,19 @@
  * These tests verify the server correctly stores source_url metadata
  * when provided in the multipart upload. The actual URL fetching happens
  * in the CLI (file-input.ts), but the API must persist the source.
+ *
+ * Uses MemoryBlobStore -- no temp dirs, no cleanup.
  */
 
 import { assertEquals, assertExists } from "jsr:@std/assert";
-import { setupDb } from "@tray/core";
+import { setupDb, MemoryBlobStore } from "@tray/core";
 import { createApp } from "@tray/api";
 
 async function freshApp() {
   const db = await setupDb(":memory:");
-  const dir = Deno.makeTempDirSync({ prefix: "tray-url-test-" });
-  const app = createApp(db, dir);
-  return { app, db, dir };
+  const blobs = new MemoryBlobStore();
+  const app = createApp(db, { blobs });
+  return { app, db };
 }
 
 async function post(app: ReturnType<typeof createApp>, path: string, body: unknown) {
@@ -32,7 +34,7 @@ async function get(app: ReturnType<typeof createApp>, path: string) {
 }
 
 Deno.test("POST /api/attachments stores source_url when provided", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   const part = await (await post(app, "/api/parts", { name: "TestPart" })).json();
 
   const form = new FormData();
@@ -54,12 +56,11 @@ Deno.test("POST /api/attachments stores source_url when provided", async () => {
   assertEquals(att.source_url, "https://example.com/photo.jpg");
   assertEquals(att.filename, "photo.jpg");
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("POST /api/attachments works without source_url (local file)", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   const part = await (await post(app, "/api/parts", { name: "TestPart" })).json();
 
   const form = new FormData();
@@ -79,12 +80,11 @@ Deno.test("POST /api/attachments works without source_url (local file)", async (
   const att = await res.json();
   assertEquals(att.source_url, null);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("Image attachment generates thumbnail and source_url is preserved", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   const part = await (await post(app, "/api/parts", { name: "TestPart" })).json();
 
   // Create a real PNG so thumbnail generation works
@@ -118,6 +118,5 @@ Deno.test("Image attachment generates thumbnail and source_url is preserved", as
   assertExists(updated.thumbnail);
   assertEquals(typeof updated.thumbnail, "string");
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });

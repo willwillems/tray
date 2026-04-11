@@ -55,7 +55,7 @@ Neither competitor is CLI-first. Both require a web server, a database server, a
 
 This is the most important architectural decision in the project.
 
-Every operation goes through the Hono HTTP API. The CLI never touches the database directly. The CLI never writes files to the attachments directory. The CLI never generates thumbnails. The server does all of that.
+Every operation goes through the Hono HTTP API. The CLI never touches the database directly. The CLI never writes to the BlobStore. The CLI never generates thumbnails. The server does all of that.
 
 In local mode, the server is booted in-process for each command (~2ms overhead). In remote mode, the server is at a URL. The CLI code is identical in both cases.
 
@@ -418,7 +418,7 @@ Category (tree) ─────────── Part ────────�
                               ├──── Supplier Part ─── Supplier
                               │       └── Price Break
                               │
-                              ├──── Attachment (metadata in DB, files on disk)
+                              ├──── Attachment (metadata in DB, blobs in BlobStore)
                               │       (content-addressed, sha256, dedup)
                               │
                               └──── BOM Line ─── Project
@@ -475,22 +475,29 @@ Part ──── FTS5 Index (name, description, manufacturer, mpn, ipn, tags, k
 
 ### 6.6 Attachments & Thumbnails
 
-Attachments are always handled through the API, never directly by the CLI. The same code path runs in local mode (in-process server) and remote mode (remote server). The server is the only thing that writes to the attachments directory.
+Attachments are always handled through the API, never directly by the CLI. The same code path runs in local mode (in-process server) and remote mode (remote server). The server is the only thing that writes to the BlobStore.
 
-**Storage:** Content-addressed on local disk at `~/.tray/attachments/{first-2-chars-of-hash}/{hash}.{ext}`. Deduplication is automatic -- if two parts have the same datasheet, it's stored once. The database stores metadata only (filename, hash, size, mime type, type).
+**Storage:** Content-addressed via a pluggable `BlobStore` abstraction. Keys follow the pattern `{sha256[0:2]}/{sha256}.{ext}`. Deduplication is automatic -- if two parts have the same datasheet, it's stored once. The database stores metadata only (filename, hash, size, mime type, type).
+
+Three implementations exist:
+- `FsBlobStore` -- local filesystem at `~/.tray/attachments/` (default for local mode)
+- `MemoryBlobStore` -- in-memory `Map` (used in tests for isolation, no cleanup needed)
+- `R2BlobStore` -- Cloudflare R2 (future, for hosted/remote deployments)
+
+The `BlobStore` interface has five methods: `put(key, data)`, `get(key)`, `has(key)`, `delete(key)`, `hash(data)`. Hashing lives on the store because it's platform-dependent (`node:crypto` locally, Web Crypto on Cloudflare).
 
 **Upload flow (identical for local and remote mode):**
 1. CLI reads file from disk
 2. CLI sends `POST /api/attachments` (multipart form data)
-3. Server receives file, computes sha256 hash
-4. Server checks for existing file with same hash (dedup)
-5. Server stores file at `~/.tray/attachments/{hash-prefix}/{hash}.{ext}`
+3. Server receives file, computes sha256 hash via `BlobStore.hash()`
+4. Server checks for existing file with same hash (dedup) via `BlobStore.has()`
+5. Server stores file via `BlobStore.put()` (key: `{hash-prefix}/{hash}.{ext}`)
 6. Server inserts Attachment metadata row
 7. If image + attached to a Part: server generates 128x128 JPEG thumbnail via ImageScript (~50ms), stores as base64 on `Part.thumbnail`
 8. Server returns attachment metadata as JSON
 
 **Download flow:**
-- `GET /api/attachments/:id/file` streams the file from server disk
+- `GET /api/attachments/:id/file` reads the blob via `BlobStore.get()` and streams the response
 - In remote mode, CLI streams to temp file for `tray attach open` or pipes to stdout
 
 **Thumbnails:** Base64-encoded 128x128 JPEG stored inline on `Part.thumbnail` (~2-5KB). Included in every list/search API response for zero-cost display. Generated automatically when first image attachment is added to a part. Regenerated via `tray attach set-preview <attachment-id>`. Uses ImageScript (148KB, pure TS + tiny WASM codecs, pipeline: decode -> resize Lanczos -> JPEG quality 65 -> base64).
@@ -728,22 +735,27 @@ export default {
 
 **Database:** SQLite by default, single file, zero config. Stored at `~/.tray/data.db` (global) or `.tray/data.db` (project-scoped, if `tray init` run in a directory). Thumbnails stored inline on Part rows. All structured data in the database.
 
-**Attachments:** Full-size files stored on disk at `~/.tray/attachments/`, content-addressed by sha256 hash. The database stores metadata only. The server is the only writer.
+**Attachments:** Full-size files stored via the `BlobStore` abstraction (local default: `~/.tray/attachments/`), content-addressed by sha256 hash. The database stores metadata only. The server is the only writer.
 
 **Backup:**
 ```
 tray backup
-  Creating backup...
-  Database: ~/.tray/data.db (12MB)
-  Attachments: ~/.tray/attachments/ (847MB, 234 files)
-  Written to: ~/.tray/backups/tray-2026-04-01-143022.tar.gz
+  Backup created: ~/.tray/data-backup-2026-04-01T14-30-22.db
 
-tray restore tray-2026-04-01-143022.tar.gz
-  Restoring database... done
-  Restoring 234 attachments... done
+tray backup ~/backups/inventory.db
+  Backup created: ~/backups/inventory.db
+
+tray restore ~/backups/inventory.db
+  This will REPLACE the database at: ~/.tray/data.db
+  Current database saved as: ~/.tray/data.db.pre-restore
+  Restoring... done
 ```
 
-`tray backup` creates a tar.gz archive of `data.db` + `attachments/` directory. One command, one output file. `tray restore` extracts both. In remote mode, backup is a server-side operation (requires admin role).
+`tray backup` uses SQLite's `VACUUM INTO` to create a compacted, consistent copy of the database. The backup file is a fully functional SQLite database (not an archive). `tray restore` replaces the current database with the backup file, saving the existing database as `data.db.pre-restore` as a safety net.
+
+**What's included:** All structured data -- parts, stock, categories, suppliers, projects, BOMs, build orders, purchase orders, audit log, FTS5 indexes, users.
+
+**What's NOT included:** Attachment files (stored in the BlobStore). Only attachment metadata is preserved in the database. To back up attachments in local mode, copy `~/.tray/attachments/` separately.
 
 ---
 

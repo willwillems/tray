@@ -8,6 +8,8 @@
 
 import { type Kysely, sql } from "kysely";
 import { recordAudit } from "./audit.ts";
+import { generateThumbnail, readAttachmentFile } from "./attachments.ts";
+import type { BlobStore } from "./storage.ts";
 import { resolveOrCreateCategoryPath } from "./categories.ts";
 import { resolveOrCreateLocationPath } from "./stock.ts";
 import { parseParameterValue } from "./parameters.ts";
@@ -330,6 +332,76 @@ export async function deletePart(
     action: "delete",
     old_values: existing as unknown as Record<string, unknown>,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Thumbnail Management
+// ---------------------------------------------------------------------------
+
+/**
+ * Set a part's thumbnail from an existing attachment.
+ * Reads the attachment file, generates a 128x128 JPEG thumbnail, and stores it.
+ * The attachment must belong to this part.
+ */
+export async function setPartThumbnail(
+  db: Kysely<Database>,
+  partId: number,
+  attachmentId: number,
+  store: BlobStore,
+): Promise<PartWithDetails> {
+  const part = await db.selectFrom("parts").selectAll().where("id", "=", partId).executeTakeFirst();
+  if (!part) throw new Error(`Part ${partId} not found`);
+
+  const attachment = await db.selectFrom("attachments").selectAll()
+    .where("id", "=", attachmentId).executeTakeFirst();
+  if (!attachment) throw new Error(`Attachment ${attachmentId} not found`);
+
+  if (attachment.entity_type !== "part" || attachment.entity_id !== partId) {
+    throw new Error(`Attachment ${attachmentId} does not belong to part ${partId}`);
+  }
+
+  const fileData = await readAttachmentFile(store, attachment.storage_key);
+  const thumbBase64 = await generateThumbnail(fileData);
+  if (!thumbBase64) {
+    throw new Error(`Could not generate thumbnail from attachment ${attachmentId} (unsupported format or corrupt image)`);
+  }
+
+  await db.updateTable("parts").set({ thumbnail: thumbBase64 }).where("id", "=", partId).execute();
+
+  await recordAudit(db, {
+    entity_type: "part",
+    entity_id: partId,
+    action: "update",
+    old_values: { thumbnail: part.thumbnail ? "<base64>" : null },
+    new_values: { thumbnail: "<base64>", source_attachment_id: attachmentId },
+  });
+
+  const updated = await db.selectFrom("parts").selectAll().where("id", "=", partId).executeTakeFirstOrThrow();
+  return await enrichPart(db, updated);
+}
+
+/**
+ * Clear a part's thumbnail.
+ */
+export async function clearPartThumbnail(
+  db: Kysely<Database>,
+  partId: number,
+): Promise<PartWithDetails> {
+  const part = await db.selectFrom("parts").selectAll().where("id", "=", partId).executeTakeFirst();
+  if (!part) throw new Error(`Part ${partId} not found`);
+
+  await db.updateTable("parts").set({ thumbnail: null }).where("id", "=", partId).execute();
+
+  await recordAudit(db, {
+    entity_type: "part",
+    entity_id: partId,
+    action: "update",
+    old_values: { thumbnail: part.thumbnail ? "<base64>" : null },
+    new_values: { thumbnail: null },
+  });
+
+  const updated = await db.selectFrom("parts").selectAll().where("id", "=", partId).executeTakeFirstOrThrow();
+  return await enrichPart(db, updated);
 }
 
 // ---------------------------------------------------------------------------

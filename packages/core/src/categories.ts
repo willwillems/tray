@@ -5,6 +5,7 @@
  */
 
 import type { Kysely } from "kysely";
+import { recordAudit } from "./audit.ts";
 import type { Category, Database, NewCategory } from "./schema.ts";
 
 /**
@@ -129,11 +130,20 @@ export async function createCategory(
   db: Kysely<Database>,
   input: NewCategory,
 ): Promise<Category> {
-  return await db
+  const category = await db
     .insertInto("categories")
     .values(input)
     .returningAll()
     .executeTakeFirstOrThrow();
+
+  await recordAudit(db, {
+    entity_type: "category",
+    entity_id: category.id,
+    action: "create",
+    new_values: category as unknown as Record<string, unknown>,
+  });
+
+  return category;
 }
 
 /**
@@ -144,12 +154,25 @@ export async function updateCategory(
   id: number,
   updates: Partial<Pick<Category, "name" | "description" | "reference_prefix" | "parent_id">>,
 ): Promise<Category> {
-  return await db
+  const existing = await getCategory(db, id);
+  if (!existing) throw new Error(`Category ${id} not found`);
+
+  const updated = await db
     .updateTable("categories")
     .set(updates)
     .where("id", "=", id)
     .returningAll()
     .executeTakeFirstOrThrow();
+
+  await recordAudit(db, {
+    entity_type: "category",
+    entity_id: id,
+    action: "update",
+    old_values: existing as unknown as Record<string, unknown>,
+    new_values: updated as unknown as Record<string, unknown>,
+  });
+
+  return updated;
 }
 
 /**
@@ -180,6 +203,13 @@ export async function deleteCategory(
     .deleteFrom("categories")
     .where("id", "=", id)
     .execute();
+
+  await recordAudit(db, {
+    entity_type: "category",
+    entity_id: id,
+    action: "delete",
+    old_values: cat as unknown as Record<string, unknown>,
+  });
 }
 
 /**

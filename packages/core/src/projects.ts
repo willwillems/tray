@@ -180,10 +180,19 @@ export async function addBomLine(
       .where("id", "=", existing.id)
       .returningAll()
       .executeTakeFirstOrThrow();
+
+    await recordAudit(db, {
+      entity_type: "bom_line",
+      entity_id: existing.id,
+      action: "update",
+      old_values: { quantity_required: existing.quantity_required, reference_designators: existing.reference_designators },
+      new_values: { quantity_required: updated.quantity_required, reference_designators: updated.reference_designators },
+    });
+
     return updated;
   }
 
-  return await db
+  const line = await db
     .insertInto("bom_lines")
     .values({
       project_id: input.project_id,
@@ -194,15 +203,31 @@ export async function addBomLine(
     })
     .returningAll()
     .executeTakeFirstOrThrow();
+
+  await recordAudit(db, {
+    entity_type: "bom_line",
+    entity_id: line.id,
+    action: "create",
+    new_values: { project_id: line.project_id, part_id: line.part_id, quantity_required: line.quantity_required },
+  });
+
+  return line;
 }
 
 export async function removeBomLine(
   db: Kysely<Database>,
   id: number,
 ): Promise<void> {
-  const existing = await db.selectFrom("bom_lines").select("id").where("id", "=", id).executeTakeFirst();
+  const existing = await db.selectFrom("bom_lines").selectAll().where("id", "=", id).executeTakeFirst();
   if (!existing) throw new Error(`BOM line ${id} not found`);
   await db.deleteFrom("bom_lines").where("id", "=", id).execute();
+
+  await recordAudit(db, {
+    entity_type: "bom_line",
+    entity_id: id,
+    action: "delete",
+    old_values: { project_id: existing.project_id, part_id: existing.part_id, quantity_required: existing.quantity_required },
+  });
 }
 
 export async function getBomLines(

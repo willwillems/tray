@@ -27,7 +27,7 @@ Server (Hono, always the authority)
   |  Stores/serves attachment files
   |  Generates thumbnails (ImageScript)
   v
-SQLite + filesystem
+SQLite + BlobStore (filesystem by default)
 ```
 
 **Why this matters for development:** There is exactly one code path for every operation. If you implement a feature, you implement it in `core/` (logic) and `api/` (route). The CLI is just a thin adapter that parses flags, calls the API, and formats output. Never add business logic in `cli/`.
@@ -180,22 +180,22 @@ All tests run against in-memory SQLite. The entire suite should finish in under 
 
 ## Attachment Handling
 
-Attachments (images, datasheets, CAD files) are always handled through the API, never directly by the CLI.
+Attachments (images, datasheets, CAD files) are always handled through the API, never directly by the CLI. The server stores blobs via a `BlobStore` interface (`FsBlobStore` is the local default, writing to `~/.tray/blobs/`). The storage backend is pluggable -- pass `{ blobs?: BlobStore }` to `createApp`.
 
 **Upload flow (same for local and remote):**
 1. CLI reads file from disk
 2. CLI sends `POST /api/attachments` (multipart form data)
 3. Server receives file, computes sha256 hash
-4. Server stores file at `~/.tray/attachments/{first-2-chars}/{hash}.{ext}` (content-addressed, dedup by hash)
+4. Server stores file via `BlobStore.put(hash, bytes)` (content-addressed, dedup by hash)
 5. Server inserts metadata row in Attachment table
 6. If image + attached to a Part: server generates 128x128 JPEG thumbnail via ImageScript, stores as base64 on `Part.thumbnail`
 7. Server returns attachment metadata as JSON
 
 **Download flow:**
-- Local mode: `GET /api/attachments/:id/file` reads from local disk, streams response
-- Remote mode: same endpoint, CLI streams to temp file or pipes to stdout
+- `GET /api/attachments/:id/file` retrieves bytes via `BlobStore.get(hash)` and streams the response
+- Works identically in local and remote mode
 
-The CLI never touches `~/.tray/attachments/` directly. The server is the only writer.
+The CLI never touches the blob store directly. The server is the only writer.
 
 ---
 
@@ -223,7 +223,7 @@ const base64 = btoa(String.fromCharCode(...jpeg));
 - **ISO 8601 for all timestamps.** Stored as TEXT in SQLite. `new Date().toISOString()`.
 - **Zod schemas define the source of truth** for input validation. Shared between API routes and any other validation point.
 - **Kysely `Database` interface defines the source of truth** for the database schema. All table types are inferred from this interface.
-- **Content-addressed attachment storage.** Files named by sha256 hash. Dedup is automatic.
+- **Content-addressed attachment storage.** Blobs named by sha256 hash, stored via `BlobStore`. Dedup is automatic.
 - **Audit log on every mutation.** Every create/update/delete records old_values and new_values as JSON in the audit_log table.
 - **SI prefix parsing** for part parameters: p, n, u/µ, m, k, M, G. Parsed to numeric on insert, stored alongside the raw text value.
 - **FTS5 index** on parts (name, description, manufacturer, mpn, ipn, tags, keywords). Kept in sync via SQLite triggers.
@@ -256,8 +256,9 @@ Do NOT hardcode version strings anywhere. If you need the version in code, impor
 - Do NOT add business logic in `cli/`. The CLI is a thin HTTP client + output formatter.
 - Do NOT import `@parts/core` in `cli/` or `web/`. Only `api/` imports core.
 - Do NOT use global/singleton database connections. Pass `db` as a parameter for test isolation.
-- Do NOT store file content in SQLite. Files go on disk, metadata goes in the database, thumbnails (small, derived) go inline on Part.
+- Do NOT store file content in SQLite. Attachments go through `BlobStore`, metadata goes in the database, thumbnails (small, derived) go inline on Part. Never write to the blob storage directory directly -- always use the `BlobStore` interface.
 - Do NOT parse CLI table output in tests. Use `--format json`.
 - Do NOT skip the audit log. Every mutation must be logged.
 - Do NOT assume local mode. The CLI code should work identically whether the server is in-process or remote.
+- Do NOT use `npm:` specifiers or Node.js npm packages. All dependencies must be Deno-native ESM from JSR (`jsr:`) or `deno.land/x/`. If a capability isn't available as Deno-native ESM, find an alternative approach (WASM from deno.land/x, Web APIs, or shell out to a system tool as a last resort).
 - Do NOT forget to update documentation. After every feature is developed, update the relevant docs in `/docs`, the doc index, AND the skill file at `skills/tray/SKILL.md`. The skill file is the external-facing reference for how to use the CLI -- it must stay in sync with implemented commands. Documentation is a deliverable, not an afterthought.

@@ -1,35 +1,29 @@
 /**
  * Core unit tests: Attachments and thumbnails.
+ *
+ * All tests use MemoryBlobStore -- no filesystem, no temp directories, no cleanup.
  */
 
 import { assertEquals, assertExists, assertRejects } from "jsr:@std/assert";
 import { setupDb } from "../src/db.ts";
-import { createPart } from "../src/parts.ts";
+import { clearPartThumbnail, createPart, setPartThumbnail } from "../src/parts.ts";
 import {
   deleteAttachment,
+  detectImageFormat,
   generateThumbnail,
   getAttachment,
   listAttachments,
   readAttachmentFile,
   storeAttachment,
 } from "../src/attachments.ts";
+import { MemoryBlobStore } from "../src/storage-memory.ts";
 
 async function freshDb() {
   return await setupDb(":memory:");
 }
 
-function tempDir(): string {
-  return Deno.makeTempDirSync({ prefix: "tray-test-" });
-}
-
-/** Create a minimal valid PNG (1x1 pixel, red) */
-function createTestPng(): Uint8Array {
-  // Minimal 1x1 red PNG
-  const header = new Uint8Array([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
-  ]);
-  // We'll use ImageScript to create a proper one
-  return header; // placeholder
+function freshStore() {
+  return new MemoryBlobStore();
 }
 
 /** Create test file content */
@@ -41,7 +35,7 @@ function createTestFile(content: string): Uint8Array {
 
 Deno.test("storeAttachment - stores file and records metadata", async () => {
   const db = await freshDb();
-  const dir = tempDir();
+  const blobs = freshStore();
   const part = await createPart(db, { name: "NE555" });
   const data = createTestFile("test datasheet content");
 
@@ -51,7 +45,7 @@ Deno.test("storeAttachment - stores file and records metadata", async () => {
     filename: "NE555_datasheet.pdf",
     data,
     mime_type: "application/pdf",
-    attachments_dir: dir,
+    store: blobs,
   });
 
   assertEquals(att.filename, "NE555_datasheet.pdf");
@@ -63,17 +57,16 @@ Deno.test("storeAttachment - stores file and records metadata", async () => {
   assertExists(att.hash);
   assertExists(att.storage_key);
 
-  // File should exist on disk
-  const stored = readAttachmentFile(dir, att.storage_key);
+  // File should exist in store
+  const stored = await readAttachmentFile(blobs, att.storage_key);
   assertEquals(stored.length, data.length);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("storeAttachment - content-addressed dedup", async () => {
   const db = await freshDb();
-  const dir = tempDir();
+  const blobs = freshStore();
   const p1 = await createPart(db, { name: "Part1" });
   const p2 = await createPart(db, { name: "Part2" });
   const data = createTestFile("shared datasheet");
@@ -84,7 +77,7 @@ Deno.test("storeAttachment - content-addressed dedup", async () => {
     filename: "shared.pdf",
     data,
     mime_type: "application/pdf",
-    attachments_dir: dir,
+    store: blobs,
   });
 
   const att2 = await storeAttachment(db, {
@@ -93,7 +86,7 @@ Deno.test("storeAttachment - content-addressed dedup", async () => {
     filename: "also_shared.pdf",
     data,
     mime_type: "application/pdf",
-    attachments_dir: dir,
+    store: blobs,
   });
 
   // Same hash, same storage key (deduped)
@@ -105,13 +98,12 @@ Deno.test("storeAttachment - content-addressed dedup", async () => {
   assertEquals(att1.filename, "shared.pdf");
   assertEquals(att2.filename, "also_shared.pdf");
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("storeAttachment - guesses type from mime and filename", async () => {
   const db = await freshDb();
-  const dir = tempDir();
+  const blobs = freshStore();
   const part = await createPart(db, { name: "NE555" });
 
   const img = await storeAttachment(db, {
@@ -120,7 +112,7 @@ Deno.test("storeAttachment - guesses type from mime and filename", async () => {
     filename: "photo.jpg",
     data: createTestFile("fake image"),
     mime_type: "image/jpeg",
-    attachments_dir: dir,
+    store: blobs,
   });
   assertEquals(img.type, "image");
 
@@ -130,7 +122,7 @@ Deno.test("storeAttachment - guesses type from mime and filename", async () => {
     filename: "board.kicad_pcb",
     data: createTestFile("fake kicad"),
     mime_type: "application/octet-stream",
-    attachments_dir: dir,
+    store: blobs,
   });
   assertEquals(cad.type, "cad");
 
@@ -140,17 +132,16 @@ Deno.test("storeAttachment - guesses type from mime and filename", async () => {
     filename: "notes.txt",
     data: createTestFile("some notes"),
     mime_type: "text/plain",
-    attachments_dir: dir,
+    store: blobs,
   });
   assertEquals(other.type, "other");
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("storeAttachment - creates audit log", async () => {
   const db = await freshDb();
-  const dir = tempDir();
+  const blobs = freshStore();
   const part = await createPart(db, { name: "NE555" });
 
   await storeAttachment(db, {
@@ -159,7 +150,7 @@ Deno.test("storeAttachment - creates audit log", async () => {
     filename: "test.pdf",
     data: createTestFile("test"),
     mime_type: "application/pdf",
-    attachments_dir: dir,
+    store: blobs,
   });
 
   const logs = await db.selectFrom("audit_log").selectAll()
@@ -167,7 +158,6 @@ Deno.test("storeAttachment - creates audit log", async () => {
   assertEquals(logs.length, 1);
   assertEquals(logs[0].action, "create");
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
@@ -175,7 +165,7 @@ Deno.test("storeAttachment - creates audit log", async () => {
 
 Deno.test("listAttachments - returns attachments for entity", async () => {
   const db = await freshDb();
-  const dir = tempDir();
+  const blobs = freshStore();
   const part = await createPart(db, { name: "NE555" });
 
   await storeAttachment(db, {
@@ -184,7 +174,7 @@ Deno.test("listAttachments - returns attachments for entity", async () => {
     filename: "a.pdf",
     data: createTestFile("a"),
     mime_type: "application/pdf",
-    attachments_dir: dir,
+    store: blobs,
   });
   await storeAttachment(db, {
     entity_type: "part",
@@ -192,21 +182,20 @@ Deno.test("listAttachments - returns attachments for entity", async () => {
     filename: "b.pdf",
     data: createTestFile("b"),
     mime_type: "application/pdf",
-    attachments_dir: dir,
+    store: blobs,
   });
 
   const atts = await listAttachments(db, "part", part.id);
   assertEquals(atts.length, 2);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 // --- deleteAttachment ---
 
-Deno.test("deleteAttachment - removes metadata and file", async () => {
+Deno.test("deleteAttachment - removes metadata and blob", async () => {
   const db = await freshDb();
-  const dir = tempDir();
+  const blobs = freshStore();
   const part = await createPart(db, { name: "NE555" });
 
   const att = await storeAttachment(db, {
@@ -215,31 +204,24 @@ Deno.test("deleteAttachment - removes metadata and file", async () => {
     filename: "test.pdf",
     data: createTestFile("test content"),
     mime_type: "application/pdf",
-    attachments_dir: dir,
+    store: blobs,
   });
 
-  await deleteAttachment(db, att.id, dir);
+  await deleteAttachment(db, att.id, blobs);
 
   const found = await getAttachment(db, att.id);
   assertEquals(found, undefined);
 
-  // File should be gone
-  let exists = false;
-  try {
-    Deno.statSync(`${dir}/${att.storage_key}`);
-    exists = true;
-  } catch {
-    exists = false;
-  }
+  // Blob should be gone
+  const exists = await blobs.has(att.storage_key);
   assertEquals(exists, false);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
-Deno.test("deleteAttachment - keeps file if other references exist", async () => {
+Deno.test("deleteAttachment - keeps blob if other references exist", async () => {
   const db = await freshDb();
-  const dir = tempDir();
+  const blobs = freshStore();
   const p1 = await createPart(db, { name: "Part1" });
   const p2 = await createPart(db, { name: "Part2" });
   const data = createTestFile("shared content");
@@ -250,7 +232,7 @@ Deno.test("deleteAttachment - keeps file if other references exist", async () =>
     filename: "shared.pdf",
     data,
     mime_type: "application/pdf",
-    attachments_dir: dir,
+    store: blobs,
   });
   await storeAttachment(db, {
     entity_type: "part",
@@ -258,24 +240,24 @@ Deno.test("deleteAttachment - keeps file if other references exist", async () =>
     filename: "shared2.pdf",
     data,
     mime_type: "application/pdf",
-    attachments_dir: dir,
+    store: blobs,
   });
 
   // Delete first reference
-  await deleteAttachment(db, att1.id, dir);
+  await deleteAttachment(db, att1.id, blobs);
 
-  // File should still exist (second reference remains)
-  const stored = readAttachmentFile(dir, att1.storage_key);
+  // Blob should still exist (second reference remains)
+  const stored = await readAttachmentFile(blobs, att1.storage_key);
   assertEquals(stored.length, data.length);
 
-  Deno.removeSync(dir, { recursive: true });
   await db.destroy();
 });
 
 Deno.test("deleteAttachment - not found throws", async () => {
   const db = await freshDb();
+  const blobs = freshStore();
   await assertRejects(
-    () => deleteAttachment(db, 999, "/tmp"),
+    () => deleteAttachment(db, 999, blobs),
     Error,
     "Attachment 999 not found",
   );
@@ -316,7 +298,7 @@ Deno.test("generateThumbnail - returns null for invalid data", async () => {
 
 Deno.test("storeAttachment - generates thumbnail for image attached to part", async () => {
   const db = await freshDb();
-  const dir = tempDir();
+  const blobs = freshStore();
   const part = await createPart(db, { name: "NE555" });
 
   // Create a real PNG
@@ -331,7 +313,7 @@ Deno.test("storeAttachment - generates thumbnail for image attached to part", as
     filename: "photo.png",
     data: png,
     mime_type: "image/png",
-    attachments_dir: dir,
+    store: blobs,
   });
 
   // Part should now have a thumbnail
@@ -340,6 +322,197 @@ Deno.test("storeAttachment - generates thumbnail for image attached to part", as
   assertExists(updated.thumbnail);
   assertEquals(updated.thumbnail!.length > 100, true);
 
-  Deno.removeSync(dir, { recursive: true });
+  await db.destroy();
+});
+
+// --- setPartThumbnail / clearPartThumbnail ---
+
+Deno.test("setPartThumbnail - sets thumbnail from existing attachment", async () => {
+  const db = await freshDb();
+  const blobs = freshStore();
+  const part = await createPart(db, { name: "NE555" });
+
+  // Create and attach an image
+  const { Image } = await import("imagescript");
+  const img = new Image(256, 256);
+  img.fill(0xFF0000FF);
+  const png = await img.encode();
+
+  const att = await storeAttachment(db, {
+    entity_type: "part",
+    entity_id: part.id,
+    filename: "photo.png",
+    data: png,
+    mime_type: "image/png",
+    store: blobs,
+  });
+
+  // Clear the auto-generated thumbnail first
+  await db.updateTable("parts").set({ thumbnail: null }).where("id", "=", part.id).execute();
+  const cleared = await db.selectFrom("parts").select("thumbnail").where("id", "=", part.id).executeTakeFirstOrThrow();
+  assertEquals(cleared.thumbnail, null);
+
+  // Now set it from the attachment
+  const result = await setPartThumbnail(db, part.id, att.id, blobs);
+  assertExists(result.thumbnail);
+  assertEquals(result.thumbnail!.length > 100, true);
+
+  await db.destroy();
+});
+
+Deno.test("setPartThumbnail - rejects attachment from different part", async () => {
+  const db = await freshDb();
+  const blobs = freshStore();
+  const part1 = await createPart(db, { name: "NE555" });
+  const part2 = await createPart(db, { name: "LM7805" });
+
+  const att = await storeAttachment(db, {
+    entity_type: "part",
+    entity_id: part1.id,
+    filename: "photo.png",
+    data: createTestFile("img"),
+    mime_type: "image/png",
+    store: blobs,
+  });
+
+  await assertRejects(
+    () => setPartThumbnail(db, part2.id, att.id, blobs),
+    Error,
+    "does not belong to part",
+  );
+
+  await db.destroy();
+});
+
+Deno.test("setPartThumbnail - rejects non-image attachment", async () => {
+  const db = await freshDb();
+  const blobs = freshStore();
+  const part = await createPart(db, { name: "NE555" });
+
+  const att = await storeAttachment(db, {
+    entity_type: "part",
+    entity_id: part.id,
+    filename: "datasheet.pdf",
+    data: createTestFile("not an image"),
+    mime_type: "application/pdf",
+    store: blobs,
+  });
+
+  await assertRejects(
+    () => setPartThumbnail(db, part.id, att.id, blobs),
+    Error,
+    "Could not generate thumbnail",
+  );
+
+  await db.destroy();
+});
+
+Deno.test("clearPartThumbnail - clears existing thumbnail", async () => {
+  const db = await freshDb();
+  const blobs = freshStore();
+  const part = await createPart(db, { name: "NE555" });
+
+  // Create and attach an image (auto-generates thumbnail)
+  const { Image } = await import("imagescript");
+  const img = new Image(64, 64);
+  img.fill(0x00FF00FF);
+  const png = await img.encode();
+
+  await storeAttachment(db, {
+    entity_type: "part",
+    entity_id: part.id,
+    filename: "photo.png",
+    data: png,
+    mime_type: "image/png",
+    store: blobs,
+  });
+
+  // Verify thumbnail exists
+  const before = await db.selectFrom("parts").select("thumbnail").where("id", "=", part.id).executeTakeFirstOrThrow();
+  assertExists(before.thumbnail);
+
+  // Clear it
+  const result = await clearPartThumbnail(db, part.id);
+  assertEquals(result.thumbnail, null);
+
+  await db.destroy();
+});
+
+// --- detectImageFormat ---
+
+Deno.test("detectImageFormat - detects PNG", () => {
+  const data = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]);
+  assertEquals(detectImageFormat(data), "png");
+});
+
+Deno.test("detectImageFormat - detects JPEG", () => {
+  const data = new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assertEquals(detectImageFormat(data), "jpeg");
+});
+
+Deno.test("detectImageFormat - detects GIF", () => {
+  const data = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0, 0, 0, 0, 0, 0]);
+  assertEquals(detectImageFormat(data), "gif");
+});
+
+Deno.test("detectImageFormat - detects WebP", () => {
+  // RIFF....WEBP
+  const data = new Uint8Array([
+    0x52, 0x49, 0x46, 0x46,  // RIFF
+    0x00, 0x00, 0x00, 0x00,  // file size (don't care)
+    0x57, 0x45, 0x42, 0x50,  // WEBP
+  ]);
+  assertEquals(detectImageFormat(data), "webp");
+});
+
+Deno.test("detectImageFormat - detects BMP", () => {
+  const data = new Uint8Array([0x42, 0x4D, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assertEquals(detectImageFormat(data), "bmp");
+});
+
+Deno.test("detectImageFormat - returns null for unknown format", () => {
+  const data = new Uint8Array([0x00, 0x01, 0x02, 0x03, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assertEquals(detectImageFormat(data), null);
+});
+
+Deno.test("detectImageFormat - returns null for data too short", () => {
+  const data = new Uint8Array([0x89, 0x50]);
+  assertEquals(detectImageFormat(data), null);
+});
+
+Deno.test("storeAttachment - WebP file with .jpg extension skips thumbnail and warns", async () => {
+  const db = await freshDb();
+  const blobs = freshStore();
+  const part = await createPart(db, { name: "NE555" });
+
+  // Create a fake WebP file (correct magic bytes, but not a real image)
+  const webpData = new Uint8Array([
+    0x52, 0x49, 0x46, 0x46,  // RIFF
+    0x24, 0x00, 0x00, 0x00,  // file size
+    0x57, 0x45, 0x42, 0x50,  // WEBP
+    0x56, 0x50, 0x38, 0x20,  // VP8 chunk
+    0x00, 0x00, 0x00, 0x00,  // chunk size
+    0x00, 0x00, 0x00, 0x00,  // padding
+  ]);
+
+  // Attach as image/jpeg (simulating a WebP file with .jpg extension,
+  // as AliExpress commonly serves)
+  const att = await storeAttachment(db, {
+    entity_type: "part",
+    entity_id: part.id,
+    filename: "product.jpg",
+    data: webpData,
+    mime_type: "image/jpeg",  // wrong MIME from extension guess
+    store: blobs,
+  });
+
+  // Attachment should be stored successfully
+  assertExists(att.id);
+
+  // But thumbnail should NOT be generated (WebP detected by magic bytes)
+  const updated = await db.selectFrom("parts").select("thumbnail")
+    .where("id", "=", part.id).executeTakeFirstOrThrow();
+  assertEquals(updated.thumbnail, null);
+
   await db.destroy();
 });

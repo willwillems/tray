@@ -13,7 +13,7 @@
 
 import { assertEquals, assert, assertExists } from "jsr:@std/assert";
 import { z } from "zod";
-import { setupDb, createPart, createCategory } from "@tray/core";
+import { setupDb, createPart, createCategory, MemoryBlobStore } from "@tray/core";
 import { createApp } from "@tray/api";
 
 // ---------------------------------------------------------------------------
@@ -63,9 +63,8 @@ const kicadPartDetailSchema = z.object({
 
 async function freshApp() {
   const db = await setupDb(":memory:");
-  const dir = Deno.makeTempDirSync({ prefix: "tray-kicad-test-" });
-  const app = createApp(db, dir);
-  return { app, db, dir };
+  const app = createApp(db, { blobs: new MemoryBlobStore() });
+  return { app, db };
 }
 
 async function get(app: ReturnType<typeof createApp>, path: string) {
@@ -135,7 +134,7 @@ async function seedTestData(app: ReturnType<typeof createApp>) {
 // ---------------------------------------------------------------------------
 
 Deno.test("KiCad contract: root endpoint returns valid schema", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
 
   const res = await get(app, "/kicad/v1/");
   assertEquals(res.status, 200);
@@ -144,12 +143,12 @@ Deno.test("KiCad contract: root endpoint returns valid schema", async () => {
   const result = kicadRootSchema.safeParse(body);
   assertEquals(result.success, true, `Root schema validation failed: ${JSON.stringify(body)}`);
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
 Deno.test("KiCad contract: categories endpoint returns valid schema", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   await seedTestData(app);
 
   const res = await get(app, "/kicad/v1/categories.json");
@@ -169,12 +168,12 @@ Deno.test("KiCad contract: categories endpoint returns valid schema", async () =
     assertEquals(typeof cat.description, "string", `Category description must be string, got ${typeof cat.description}`);
   }
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
 Deno.test("KiCad contract: parts list returns valid schema", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   await seedTestData(app);
 
   // Get categories first
@@ -198,12 +197,12 @@ Deno.test("KiCad contract: parts list returns valid schema", async () => {
     assertEquals(typeof part.name, "string", `Part name must be string, got ${typeof part.name}`);
   }
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
 Deno.test("KiCad contract: part detail returns valid schema with all string values", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   await seedTestData(app);
 
   // Get the NE555 part ID
@@ -255,7 +254,7 @@ Deno.test("KiCad contract: part detail returns valid schema with all string valu
   assertEquals(body.fields.manufacturer.value, "Texas Instruments");
   assertEquals(body.fields.mpn.value, "NE555P");
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
@@ -264,7 +263,7 @@ Deno.test("KiCad contract: part detail returns valid schema with all string valu
 // ---------------------------------------------------------------------------
 
 Deno.test("KiCad mock client: full fetch sequence (validates root -> categories -> parts -> detail)", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   await seedTestData(app);
 
   // Step 1: KiCad validates the root endpoint
@@ -323,7 +322,7 @@ Deno.test("KiCad mock client: full fetch sequence (validates root -> categories 
     }
   }
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
@@ -332,7 +331,7 @@ Deno.test("KiCad mock client: full fetch sequence (validates root -> categories 
 // ---------------------------------------------------------------------------
 
 Deno.test("KiCad edge case: empty category returns empty array", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
 
   // Create an empty category
   await post(app, "/api/categories", { name: "Empty Category" });
@@ -348,12 +347,12 @@ Deno.test("KiCad edge case: empty category returns empty array", async () => {
   assertEquals(parts.length, 0);
   assert(Array.isArray(parts), "Empty category must return array, not null");
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
 Deno.test("KiCad edge case: part with no footprint/datasheet returns empty strings", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
 
   await post(app, "/api/parts", {
     name: "Bare Part",
@@ -382,34 +381,34 @@ Deno.test("KiCad edge case: part with no footprint/datasheet returns empty strin
   const result = kicadPartDetailSchema.safeParse(detail);
   assert(result.success, "Bare part must still validate against schema");
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
 Deno.test("KiCad edge case: nonexistent part returns 404", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
 
   const res = await get(app, "/kicad/v1/parts/99999.json");
   assertEquals(res.status, 404);
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
 Deno.test("KiCad edge case: nonexistent category returns empty array", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
 
   const res = await get(app, "/kicad/v1/parts/category/99999.json");
   assertEquals(res.status, 200);
   const parts = await res.json();
   assertEquals(parts.length, 0);
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
 Deno.test("KiCad edge case: part parameters appear as custom fields", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
 
   await post(app, "/api/parts", {
     name: "R_10k",
@@ -438,12 +437,12 @@ Deno.test("KiCad edge case: part parameters appear as custom fields", async () =
   assertExists(detail.fields.power_rating, "power_rating parameter should be a field");
   assertEquals(detail.fields.power_rating.value, "0.125W");
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
 Deno.test("KiCad edge case: stock field is a string not a number", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
 
   await post(app, "/api/parts", { name: "Test", category: "Misc", stock: 42 });
 
@@ -459,12 +458,12 @@ Deno.test("KiCad edge case: stock field is a string not a number", async () => {
   assertEquals(typeof detail.fields.stock.value, "string", "Stock must be a string");
   assertEquals(detail.fields.stock.value, "42");
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });
 
 Deno.test("KiCad edge case: categories include full path names", async () => {
-  const { app, db, dir } = await freshApp();
+  const { app, db } = await freshApp();
   await seedTestData(app);
 
   const catRes = await get(app, "/kicad/v1/categories.json");
@@ -477,6 +476,6 @@ Deno.test("KiCad edge case: categories include full path names", async () => {
   const regulatorsCat = categories.find((c: { name: string }) => c.name === "ICs/Regulators");
   assertExists(regulatorsCat, "Should have 'ICs/Regulators' as category name");
 
-  Deno.removeSync(dir, { recursive: true });
+
   await db.destroy();
 });

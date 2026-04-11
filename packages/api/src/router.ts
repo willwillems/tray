@@ -7,14 +7,16 @@
 
 import { Hono } from "hono";
 import type { Kysely } from "kysely";
-import type { Database } from "@tray/core";
+import type { BlobStore, Database } from "@tray/core";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import {
   createCategorySchema,
   createPart,
   createPartSchema,
+  updateCategorySchema,
   deletePart,
+  FsBlobStore,
   getPart,
   listParts,
   listPartsSchema,
@@ -56,6 +58,8 @@ import {
   readAttachmentFile,
   listAttachments,
   deleteAttachment,
+  setPartThumbnail,
+  clearPartThumbnail,
   createProject,
   getProject,
   listProjects,
@@ -88,12 +92,12 @@ import type { Env } from "./context.ts";
  * The db is injected into the Hono env at construction time,
  * not via middleware (which breaks type inference).
  */
-function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
+function buildRoutes(db: Kysely<Database>, blobs: BlobStore) {
   const app = new Hono<Env>()
-    // Inject db and attachments dir into every request
+    // Inject db and blob store into every request
     .use("*", async (c, next) => {
       c.set("db", db);
-      c.set("attachments_dir", attachmentsDir);
+      c.set("blobs", blobs);
       await next();
     })
     // Health check
@@ -163,6 +167,41 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
       }
     })
 
+    // --- Part Thumbnail ---
+    .put(
+      "/api/parts/:id/thumbnail",
+      zValidator("json", z.object({
+        attachment_id: z.number().int().positive(),
+      })),
+      async (c) => {
+        const db = c.get("db");
+        const id = parseInt(c.req.param("id"), 10);
+        if (isNaN(id)) return c.json({ error: "invalid_id", message: "Part ID must be a number" }, 400);
+        const { attachment_id } = c.req.valid("json");
+        try {
+          const result = await setPartThumbnail(db, id, attachment_id, c.get("blobs"));
+          return c.json(result);
+        } catch (e) {
+          return c.json({ error: "thumbnail_error", message: (e as Error).message }, 400);
+        }
+      },
+    )
+    .delete("/api/parts/:id/thumbnail", async (c) => {
+      const db = c.get("db");
+      const id = parseInt(c.req.param("id"), 10);
+      if (isNaN(id)) return c.json({ error: "invalid_id", message: "Part ID must be a number" }, 400);
+      try {
+        const result = await clearPartThumbnail(db, id);
+        return c.json(result);
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (msg.includes("not found")) {
+          return c.json({ error: "not_found", message: msg }, 404);
+        }
+        return c.json({ error: "thumbnail_error", message: msg }, 500);
+      }
+    })
+
     // --- Categories ---
     .get("/api/categories", async (c) => {
       const db = c.get("db");
@@ -213,6 +252,29 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
       const path = await getCategoryPath(db, id);
       return c.json({ ...cat, path });
     })
+    .patch(
+      "/api/categories/:id",
+      zValidator("json", updateCategorySchema),
+      async (c) => {
+        const db = c.get("db");
+        const id = parseInt(c.req.param("id"), 10);
+        if (isNaN(id)) {
+          return c.json({ error: "invalid_id", message: "Category ID must be a number" }, 400);
+        }
+        try {
+          const input = c.req.valid("json");
+          const updated = await updateCategory(db, id, input);
+          const path = await getCategoryPath(db, updated.id);
+          return c.json({ ...updated, path });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes("not found")) {
+            return c.json({ error: "not_found", message: msg }, 404);
+          }
+          return c.json({ error: "validation_error", message: msg }, 400);
+        }
+      },
+    )
     .delete("/api/categories/:id", async (c) => {
       const db = c.get("db");
       const id = parseInt(c.req.param("id"), 10);
@@ -566,7 +628,7 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
         mime_type: file.type || "application/octet-stream",
         type: (body["type"] as string) ?? undefined,
         source_url: (body["source_url"] as string) ?? undefined,
-        attachments_dir: c.get("attachments_dir"),
+        store: c.get("blobs"),
       });
       return c.json(att, 201);
     })
@@ -584,7 +646,7 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
       if (!att) return c.json({ error: "not_found", message: `Attachment ${id} not found` }, 404);
 
       try {
-        const data = readAttachmentFile(c.get("attachments_dir"), att.storage_key);
+        const data = await readAttachmentFile(c.get("blobs"), att.storage_key);
         return new Response(data, {
           headers: {
             "Content-Type": att.mime_type,
@@ -593,7 +655,7 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
           },
         });
       } catch {
-        return c.json({ error: "file_missing", message: "Attachment file not found on disk" }, 404);
+        return c.json({ error: "file_missing", message: "Attachment file not found in store" }, 404);
       }
     })
     .get(
@@ -615,7 +677,7 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
       const id = parseInt(c.req.param("id"), 10);
       if (isNaN(id)) return c.json({ error: "invalid_id", message: "Attachment ID must be a number" }, 400);
       try {
-        await deleteAttachment(c.get("db"), id, c.get("attachments_dir"));
+        await deleteAttachment(c.get("db"), id, c.get("blobs"));
         return c.json({ ok: true });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -913,15 +975,10 @@ function buildRoutes(db: Kysely<Database>, attachmentsDir: string) {
   return app;
 }
 
-function getDefaultAttachmentsDir(): string {
+function getDefaultBlobStore(): BlobStore {
   const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ?? ".";
   const dir = `${home}/.tray/attachments`;
-  try {
-    Deno.mkdirSync(dir, { recursive: true });
-  } catch {
-    // Already exists
-  }
-  return dir;
+  return new FsBlobStore(dir);
 }
 
 /** The Hono app type for RPC client inference */
@@ -930,10 +987,18 @@ export type AppType = ReturnType<typeof buildRoutes>;
 /**
  * Create a Hono app with all routes and db middleware.
  * Adds global error handling for unhandled exceptions.
+ *
+ * Local mode:  createApp(db)                                -- default FsBlobStore at ~/.tray/attachments
+ * Local mode:  createApp(db, { blobs: new FsBlobStore(dir) })
+ * CF mode:     createApp(db, { blobs: new R2BlobStore(bucket) })
+ * Test mode:   createApp(db, { blobs: new MemoryBlobStore() })
  */
-export function createApp(db: Kysely<Database>, attachmentsDir?: string): AppType {
-  const dir = attachmentsDir ?? getDefaultAttachmentsDir();
-  const app = buildRoutes(db, dir);
+export function createApp(
+  db: Kysely<Database>,
+  options?: { blobs?: BlobStore },
+): AppType {
+  const blobs = options?.blobs ?? getDefaultBlobStore();
+  const app = buildRoutes(db, blobs);
 
   // Global error handler: catch unhandled throws, return structured JSON
   app.onError((err, c) => {

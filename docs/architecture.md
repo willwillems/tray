@@ -65,6 +65,29 @@ users               -- Multi-user (serve mode only)
 audit_log           -- Every mutation logged
 ```
 
+## Attachment Storage (BlobStore)
+
+Attachment file content is stored via a `BlobStore` interface, not directly on disk. The default implementation is `FsBlobStore`, which writes to `~/.tray/blobs/`. Storage is content-addressed: files are named by their sha256 hash, so identical files are automatically deduplicated.
+
+```typescript
+interface BlobStore {
+  /** Store a blob by key. Overwrites if key already exists. */
+  put(key: string, data: Uint8Array): Promise<void>;
+  /** Read a blob by key. Throws if not found. */
+  get(key: string): Promise<Uint8Array>;
+  /** Check if a blob exists by key. */
+  has(key: string): Promise<boolean>;
+  /** Delete a blob by key. No-op if not found. */
+  delete(key: string): Promise<void>;
+  /** Compute SHA-256 hash of data, return lowercase hex string. */
+  hash(data: Uint8Array): Promise<string>;
+}
+```
+
+The Hono app is created via `createApp(db, { blobs?: BlobStore })`. The Hono context carries `db: Kysely<Database>` and `blobs: BlobStore` -- routes access these via `c.var.db` and `c.var.blobs`. The old `attachments_dir: string` approach has been replaced by this abstraction.
+
+The CLI never touches the blob store. Upload and download always go through the API. The server handles hashing, dedup, thumbnail generation, and streaming.
+
 ## API Routes
 
 All routes are defined in `packages/api/src/router.ts` as a single Hono chain (required for RPC type inference).
@@ -72,30 +95,44 @@ All routes are defined in `packages/api/src/router.ts` as a single Hono chain (r
 ### Parts
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/parts` | Create a part |
 | GET | `/api/parts` | List/filter parts |
+| POST | `/api/parts` | Create a part |
 | GET | `/api/parts/:id` | Get part by ID or name |
 | PATCH | `/api/parts/:id` | Update a part |
 | DELETE | `/api/parts/:id` | Delete a part |
+| PUT | `/api/parts/:id/thumbnail` | Set thumbnail from attachment |
+| DELETE | `/api/parts/:id/thumbnail` | Clear thumbnail |
 | GET | `/api/parts/:id/suppliers` | Supplier parts for a part |
 | GET | `/api/parts/:id/best-price` | Best price across suppliers |
 
-### Stock
+### Categories
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/categories` | List categories |
+| POST | `/api/categories` | Create category |
+| POST | `/api/categories/resolve` | Resolve/create category path |
+| GET | `/api/categories/:id` | Get category with path |
+| PATCH | `/api/categories/:id` | Update category |
+| DELETE | `/api/categories/:id` | Delete category (re-parents children) |
+| GET | `/api/categories/tree` | Full category tree |
+
+### Search & Tags
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/search?q=...` | Full-text search (FTS5) |
+| GET | `/api/tags` | All tags with counts |
+
+### Stock & Locations
 | Method | Path | Description |
 |---|---|---|
 | POST | `/api/stock/add` | Add stock (create/merge lot) |
 | POST | `/api/stock/adjust` | Adjust with reason |
 | POST | `/api/stock/move` | Move between locations |
 | GET | `/api/stock/:part_id` | List lots for a part |
-
-### Categories & Locations
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/categories` | List categories |
-| GET | `/api/categories/tree` | Full category tree |
-| POST | `/api/categories` | Create category |
 | GET | `/api/locations` | List locations |
-| GET | `/api/locations/tree` | Full location tree |
+| GET | `/api/locations/tree` | Location tree |
+| GET | `/api/locations/:id` | Get location with path |
+| DELETE | `/api/locations/:id` | Delete location |
 
 ### Suppliers
 | Method | Path | Description |
@@ -103,18 +140,11 @@ All routes are defined in `packages/api/src/router.ts` as a single Hono chain (r
 | POST | `/api/suppliers` | Create supplier |
 | GET | `/api/suppliers` | List suppliers |
 | GET | `/api/suppliers/:id` | Get supplier |
+| PATCH | `/api/suppliers/:id` | Update supplier |
+| DELETE | `/api/suppliers/:id` | Delete supplier |
 | POST | `/api/supplier-parts` | Link part to supplier |
-
-### Projects & Builds
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/projects` | Create project |
-| GET | `/api/projects` | List projects |
-| GET | `/api/projects/:id` | Get project with BOM |
-| POST | `/api/projects/:id/bom` | Add BOM line |
-| GET | `/api/projects/:id/check` | Check BOM availability |
-| POST | `/api/builds` | Create build order |
-| POST | `/api/builds/:id/complete` | Complete build (deduct stock) |
+| GET | `/api/suppliers/:id/parts` | Parts for a supplier |
+| DELETE | `/api/supplier-parts/:id` | Unlink part from supplier |
 
 ### Attachments
 | Method | Path | Description |
@@ -122,40 +152,76 @@ All routes are defined in `packages/api/src/router.ts` as a single Hono chain (r
 | POST | `/api/attachments` | Upload file (multipart) |
 | GET | `/api/attachments/:id` | Get metadata |
 | GET | `/api/attachments/:id/file` | Download file |
+| GET | `/api/attachments?entity_type=...&entity_id=...` | List attachments for entity |
 | DELETE | `/api/attachments/:id` | Delete attachment |
 
-### KiCad
+### Projects & BOM
 | Method | Path | Description |
 |---|---|---|
-| GET | `/kicad/v1/` | Endpoint validation |
+| POST | `/api/projects` | Create project |
+| GET | `/api/projects` | List projects |
+| GET | `/api/projects/:id` | Get project with BOM |
+| PATCH | `/api/projects/:id` | Update project |
+| DELETE | `/api/projects/:id` | Delete project |
+| POST | `/api/projects/:id/bom` | Add BOM line |
+| GET | `/api/projects/:id/bom` | Get BOM lines |
+| DELETE | `/api/bom-lines/:id` | Remove BOM line |
+| GET | `/api/projects/:id/check` | Check BOM availability |
+
+### Builds
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/builds` | Create build order |
+| POST | `/api/builds/:id/complete` | Complete build (deduct stock) |
+| GET | `/api/builds` | List build orders |
+
+### Purchase Orders
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/purchase-orders` | Create PO |
+| GET | `/api/purchase-orders` | List POs |
+| GET | `/api/purchase-orders/:id` | Get PO with lines |
+| PATCH | `/api/purchase-orders/:id` | Update PO |
+| POST | `/api/purchase-orders/:id/lines` | Add PO line |
+| PATCH | `/api/po-lines/:id` | Update PO line |
+| POST | `/api/po-lines/:id/receive` | Receive PO line (adds stock) |
+
+### KiCad HTTP Library
+| Method | Path | Description |
+|---|---|---|
+| GET | `/kicad/v1/` | Root (schema info) |
 | GET | `/kicad/v1/categories.json` | Categories for Symbol Chooser |
-| GET | `/kicad/v1/parts/category/:id.json` | Parts in a category |
+| GET | `/kicad/v1/parts/:category.json` | Parts in a category |
 | GET | `/kicad/v1/parts/:id.json` | Full part detail |
 
 ### Other
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Health check |
-| GET | `/api/search?q=...` | Full-text search |
-| GET | `/api/tags` | All tags with counts |
 | GET | `/api/audit` | Query audit log |
+| GET | `/api/audit/:id` | Get audit entry |
 
 ## Testing
 
-216 tests across three layers:
+Tests across five layers:
 
 - **Core unit tests** (`packages/core/tests/`): test domain functions directly with in-memory SQLite
 - **API integration tests** (`packages/api/tests/`): test Hono routes via `app.fetch()` (no real server)
-- **KiCad contract tests**: validate responses against the exact JSON schema KiCad expects
+- **CLI end-to-end tests** (`packages/cli/`): run the actual CLI binary against a temp database, assert on `--format json` output
+- **KiCad contract tests** (`packages/api/tests/`): validate responses against the exact JSON schema KiCad expects
+- **Scenario tests** (top-level `tests/`): multi-step business workflow tests (add parts, create project, import BOM, build, verify stock)
 
 Every test gets its own `setupDb(":memory:")`. No shared state, no fixtures, no cleanup.
 
 ```bash
-deno task test          # All 216 tests (~1 second)
-deno task test:core     # Core only
-deno task test:api      # API only
-deno task check         # Type checking
-deno task lint          # Linting
+deno task test            # All tests
+deno task test:core       # Core only
+deno task test:api        # API only
+deno task test:e2e        # CLI end-to-end
+deno task test:kicad      # KiCad contract tests
+deno task test:scenarios  # Workflow scenario tests
+deno task check           # Type checking
+deno task lint            # Linting
 ```
 
 ## Development

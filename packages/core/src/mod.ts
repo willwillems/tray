@@ -8,6 +8,11 @@
 export { setupDb } from "./db.ts";
 export { NodeSqliteDialect } from "./dialect.ts";
 
+// Blob Storage
+export type { BlobStore } from "./storage.ts";
+export { FsBlobStore } from "./storage-fs.ts";
+export { MemoryBlobStore } from "./storage-memory.ts";
+
 // Schema types and Zod schemas
 export type {
   AuditLogEntry,
@@ -41,6 +46,7 @@ export type {
   StorageLocation,
   Supplier,
   SupplierPart,
+  UpdateCategoryInput,
   UpdatePartInput,
   User,
 } from "./schema.ts";
@@ -49,14 +55,12 @@ export {
   createCategorySchema,
   createPartSchema,
   listPartsSchema,
-  manufacturingStatusEnum,
-  stockAdjustSchema,
-  createLocationSchema,
+  updateCategorySchema,
   updatePartSchema,
 } from "./schema.ts";
 
 // Parts
-export { createPart, deletePart, getPart, listParts, updatePart } from "./parts.ts";
+export { clearPartThumbnail, createPart, deletePart, getPart, listParts, setPartThumbnail, updatePart } from "./parts.ts";
 export type { PartWithDetails } from "./parts.ts";
 
 // Categories
@@ -73,14 +77,12 @@ export {
 export type { CategoryTreeNode } from "./categories.ts";
 
 // Audit
-export { getAuditEntry, queryAuditLog, recordAudit } from "./audit.ts";
+export { getAuditEntry, queryAuditLog } from "./audit.ts";
 
 // Search
 export {
-  getPartTags,
   listAllTags,
   searchParts,
-  setPartTags,
 } from "./search.ts";
 export type { SearchResult } from "./search.ts";
 
@@ -96,7 +98,6 @@ export {
   adjustStock,
   moveStock,
   getStockLots,
-  resolveOrCreateLocationPath,
 } from "./stock.ts";
 export type { StockLotWithLocation } from "./stock.ts";
 
@@ -112,13 +113,11 @@ export type { LocationTreeNode } from "./locations.ts";
 
 // Suppliers
 export {
-  addPriceBreak,
   createSupplier,
   createSupplierPart,
   deleteSupplier,
   deleteSupplierPart,
   getBestPrice,
-  getPriceBreaks,
   getSupplier,
   getSupplierPartsForPart,
   getSupplierPartsForSupplier,
@@ -210,6 +209,7 @@ export { createBackup, restoreBackup } from "./backup.ts";
 export { PluginEngine, createPluginEngine, loadPluginConfig } from "./plugins.ts";
 export type {
   CommandHandler,
+  MiddlewareHandler,
   PluginContext,
   TrayConfig,
   TrayPlugin,
