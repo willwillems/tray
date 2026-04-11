@@ -4,6 +4,7 @@ node_modules/
 
 # Build output
 /tray
+packages/web/dist/
 website/dist/
 website/.astro/
 *.db

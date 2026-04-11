@@ -16,7 +16,6 @@ const THUMBNAIL_SUPPORTED_MIMES = new Set([
   "image/jpeg",
   "image/jpg",
   "image/gif",
-  "image/webp",
   "image/bmp",
 ]);
 
@@ -45,8 +44,8 @@ export async function resolveFileInput(pathOrUrl: string): Promise<FileInput> {
  * Warn (to stderr) if the MIME type is an image format that ImageScript
  * cannot decode -- meaning no thumbnail will be generated.
  *
- * Formats supported by ImageScript: PNG, JPEG, GIF, WebP, BMP.
- * Common unsupported formats: AVIF, TIFF, SVG, HEIC.
+ * Formats supported by ImageScript: PNG, JPEG, GIF, BMP.
+ * Known unsupported formats: WebP, AVIF, TIFF, SVG, HEIC.
  */
 export function warnIfUnsupportedImageFormat(mimeType: string, filename: string): void {
   if (!mimeType.startsWith("image/")) return;
@@ -56,7 +55,7 @@ export function warnIfUnsupportedImageFormat(mimeType: string, filename: string)
   console.error(
     `Warning: .${ext} (${mimeType}) is not supported for thumbnail generation. ` +
     `The file will be attached, but no thumbnail will be created. ` +
-    `Supported image formats: PNG, JPEG, GIF, WebP, BMP.`,
+    `Supported image formats: PNG, JPEG, GIF, BMP.`,
   );
 }
 
@@ -87,11 +86,10 @@ async function fetchUrl(url: string): Promise<FileInput> {
   const data = new Uint8Array(await res.arrayBuffer());
   const filename = filenameFromUrl(url);
   const contentType = res.headers.get("content-type")?.split(";")[0]?.trim();
-  // Fall back to extension-based guess when the server returns a generic type
-  const mimeType =
-    (contentType && contentType !== "application/octet-stream")
-      ? contentType
-      : guessMimeType(filename);
+  // Trust magic bytes first, then content-type header, then extension
+  const mimeType = mimeFromMagicBytes(data)
+    ?? (contentType && contentType !== "application/octet-stream" ? contentType : null)
+    ?? guessMimeType(filename);
 
   return { data, filename, mimeType, sourceUrl: url };
 }
@@ -105,7 +103,8 @@ function readLocalFile(filePath: string): FileInput {
   }
 
   const filename = filePath.split("/").pop() ?? filePath;
-  const mimeType = guessMimeType(filename);
+  // Trust magic bytes first, then extension
+  const mimeType = mimeFromMagicBytes(data) ?? guessMimeType(filename);
 
   return { data, filename, mimeType };
 }
@@ -123,6 +122,55 @@ function filenameFromUrl(url: string): string {
     // invalid URL, fall through
   }
   return "download";
+}
+
+/**
+ * Detect MIME type from magic bytes. Returns null if not a recognized format.
+ *
+ * This is the primary format detection method -- file extensions and
+ * content-type headers are unreliable (e.g. AliExpress serves WebP as .jpg).
+ *
+ * NOTE: This is a CLI-side copy of core's detectMimeFromMagicBytes
+ * (packages/core/src/attachments.ts). The CLI cannot import core directly
+ * (package boundary rule). Keep these in sync when adding new formats.
+ */
+function mimeFromMagicBytes(data: Uint8Array): string | null {
+  if (data.length < 12) return null;
+
+  // PNG: \x89PNG
+  if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47) {
+    return "image/png";
+  }
+
+  // JPEG: FF D8 FF
+  if (data[0] === 0xFF && data[1] === 0xD8 && data[2] === 0xFF) {
+    return "image/jpeg";
+  }
+
+  // WebP: RIFF....WEBP
+  if (
+    data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 &&
+    data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+
+  // GIF: GIF8
+  if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38) {
+    return "image/gif";
+  }
+
+  // BMP: BM
+  if (data[0] === 0x42 && data[1] === 0x4D) {
+    return "image/bmp";
+  }
+
+  // PDF: %PDF
+  if (data[0] === 0x25 && data[1] === 0x50 && data[2] === 0x44 && data[3] === 0x46) {
+    return "application/pdf";
+  }
+
+  return null;
 }
 
 /**

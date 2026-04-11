@@ -159,7 +159,6 @@ Deno.test("warnIfUnsupportedImageFormat - no warning for supported formats", () 
     warnIfUnsupportedImageFormat("image/png", "photo.png");
     warnIfUnsupportedImageFormat("image/jpeg", "photo.jpg");
     warnIfUnsupportedImageFormat("image/gif", "photo.gif");
-    warnIfUnsupportedImageFormat("image/webp", "photo.webp");
     warnIfUnsupportedImageFormat("image/bmp", "photo.bmp");
     assertEquals(messages.length, 0);
   } finally {
